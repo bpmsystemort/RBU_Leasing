@@ -1,7 +1,9 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { createRequire } from "module";
-import { resetCrudTables } from "./helpers.js";
+import request from "supertest";
+import { resetCrudTables, tokens } from "./helpers.js";
 import { prisma } from "../src/lib/prisma.js";
+import { createApp } from "../src/app.js";
 import { analyzeWorkbook, commitWorkbook } from "../src/services/portfolioImportService.js";
 
 const require = createRequire(import.meta.url);
@@ -118,5 +120,28 @@ describe("commitWorkbook", () => {
     const u2 = await prisma.unit.findFirstOrThrow({ where: { unitNumber: "9Z" } });
     expect(u2.needsStatusReview).toBe(false);
     expect(u2.status).toBe("OCCUPIED");
+  });
+});
+
+const app = createApp();
+const XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+describe("import endpoints", () => {
+  it("ADMIN preview returns totals and writes nothing; officer 403", async () => {
+    const buf = await wbuf([R()]);
+    const ok = await request(app).post("/api/import/portfolio/preview").set("Authorization", `Bearer ${tokens.admin()}`).attach("file", buf, { filename: "p.xlsx", contentType: XLSX });
+    expect(ok.status).toBe(200);
+    expect(ok.body.totals.willCreate).toBe(1);
+    expect(await prisma.lease.count()).toBe(0);
+    const forbidden = await request(app).post("/api/import/portfolio/preview").set("Authorization", `Bearer ${tokens.officer()}`).attach("file", buf, { filename: "p.xlsx", contentType: XLSX });
+    expect(forbidden.status).toBe(403);
+  });
+  it("ADMIN commit writes; no file 400", async () => {
+    const buf = await wbuf([R()]);
+    const ok = await request(app).post("/api/import/portfolio/commit").set("Authorization", `Bearer ${tokens.admin()}`).attach("file", buf, { filename: "p.xlsx", contentType: XLSX });
+    expect(ok.status).toBe(200);
+    expect(ok.body.created).toBe(1);
+    expect(await prisma.lease.count()).toBe(1);
+    const noFile = await request(app).post("/api/import/portfolio/commit").set("Authorization", `Bearer ${tokens.admin()}`);
+    expect(noFile.status).toBe(400);
   });
 });

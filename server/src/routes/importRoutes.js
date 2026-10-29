@@ -12,5 +12,6 @@ const upload = multer({
 
 const router = Router();
 router.use(verifyJwt);
-router.post("/portfolio", requireRole("ADMIN"), upload.single("file"), ctrl.portfolio);
+router.post("/portfolio/preview", requireRole("ADMIN"), upload.single("file"), ctrl.preview);
+router.post("/portfolio/commit", requireRole("ADMIN"), upload.single("file"), ctrl.commit);
 export default router;
