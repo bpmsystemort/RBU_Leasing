@@ -41,6 +41,7 @@ function findHeader(ws) {
       for (const [re, field] of HEADER_FIELD) { if (re.test(h) && map[field] === undefined) { map[field] = c; break; } }
     }
     const hasCore = map.unitNumber != null && map.lessor != null && map.lessee != null && map.monthlyRent != null;
+    // Returns on the FIRST scanned row that contains the core labels — assumes the true header is the first such row within the scan window (fine for the two known layouts).
     if (hasCore) {
       // Property column: explicit "Tower" header, else the column immediately left of "Unit" (Layout B blank header).
       if (map.property == null && map.unitNumber > 1) map.property = map.unitNumber - 1;

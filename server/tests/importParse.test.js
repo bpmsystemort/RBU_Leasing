@@ -70,4 +70,51 @@ describe("parseWorkbook — header mapping", () => {
     const b = await buf((wb) => { sheetA(wb.addWorksheet("Summary")); });
     expect((await parseFromBuffer(b)).sheets.find((x) => x.name === "Summary")).toBeUndefined();
   });
+
+  it("preserves rawStart/rawEnd distinct from parsed dates: blank cells vs unparseable text", async () => {
+    const b = await buf((wb) => {
+      const add = sheetA(wb.addWorksheet("2028"));
+      // Row P: valid row, Start/End cells left blank (keys omitted entirely).
+      add({ 2: "Tower1", 3: "P1", 4: "Studio", 7: "Lessor P", 8: "Lessee P", 12: 10000 });
+      // Row Q: valid row, Start/End cells hold unparseable text.
+      add({ 2: "Tower1", 3: "Q1", 4: "Studio", 7: "Lessor Q", 8: "Lessee Q", 9: "not a date", 10: "nope", 12: 20000 });
+    });
+    const s = (await parseFromBuffer(b)).sheets.find((x) => x.name === "2028");
+    expect(s.ok).toBe(true);
+    expect(s.rows).toHaveLength(2);
+    const rowP = s.rows.find((r) => r.unitNumber === "P1");
+    const rowQ = s.rows.find((r) => r.unitNumber === "Q1");
+    expect(rowP).toBeTruthy();
+    expect(rowQ).toBeTruthy();
+
+    // Blank cell: rawStart/rawEnd stay nullish and the parsed date is null.
+    expect(rowP.rawStart == null).toBe(true);
+    expect(rowP.startDate).toBe(null);
+    expect(rowP.rawEnd == null).toBe(true);
+    expect(rowP.endDate).toBe(null);
+
+    // Unparseable text: rawStart/rawEnd keep the original string even though the parsed date is null.
+    expect(rowQ.rawStart).toBe("not a date");
+    expect(rowQ.startDate).toBe(null);
+    expect(rowQ.rawEnd).toBe("nope");
+    expect(rowQ.endDate).toBe(null);
+  });
+
+  it("reports ok:false when the header is found but a required column is missing", async () => {
+    const b = await buf((wb) => {
+      const ws = wb.addWorksheet("2029");
+      const h = ws.addRow([]);
+      h.getCell(3).value = "Unit";
+      h.getCell(7).value = "Lessor";
+      h.getCell(8).value = "Lessee";
+      h.getCell(12).value = "Monthly Rent";
+      // Start Contract Period / End Contract Period intentionally omitted.
+    });
+    const s = (await parseFromBuffer(b)).sheets.find((x) => x.name === "2029");
+    expect(s.ok).toBe(false);
+    expect(s.error).toContain("Missing required");
+    expect(typeof s.headerRow).toBe("number");
+    expect(s.headerRow).toBeTruthy();
+    expect(s.rows).toEqual([]);
+  });
 });
