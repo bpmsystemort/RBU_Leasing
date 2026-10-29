@@ -25,6 +25,7 @@ async function run() {
     <header>
       <h1>Import Portfolio</h1>
       <p class="muted">Upload the monitoring workbook (.xlsx). Re-importing the same file is safe — nothing is duplicated or deleted, and no login accounts are created.</p>
+      <p class="muted small">Imported units are recorded as Occupied; to change a unit's status, edit the unit directly.</p>
     </header>
 
     <div class="panel">

@@ -66,7 +66,10 @@ export async function importWorkbook(buffer) {
         let unit = await prisma.unit.findUnique({ where: { ownerId_unitKey: { ownerId, unitKey } } });
         const descriptive = { floor, slotNo, type: unitType, baseRent: monthlyRent }; // key fields never change
         if (unit) {
-          await prisma.unit.update({ where: { id: unit.id }, data: descriptive });
+          // Only apply non-null values: a blank cell on re-import must never erase a
+          // previously populated (or portal-edited) field.
+          const updates = Object.fromEntries(Object.entries(descriptive).filter(([, v]) => v != null));
+          if (Object.keys(updates).length) await prisma.unit.update({ where: { id: unit.id }, data: updates });
         } else {
           unit = await prisma.unit.create({ data: { ownerId, unitKey, unitNumber, building, towerId, status: "OCCUPIED", ...descriptive } });
           summary.units++;

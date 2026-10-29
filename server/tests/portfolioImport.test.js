@@ -57,6 +57,14 @@ describe("portfolio import — idempotent", () => {
     expect(await prisma.lease.count()).toBe(2);
   });
 
+  it("re-import with a blanked descriptive cell keeps the populated value", async () => {
+    await importWorkbook(await workbook({ "2024": [L({ floor: "5", slot: "P1" })] }));
+    await importWorkbook(await workbook({ "2024": [L()] })); // same unit, floor/slot omitted (blank)
+    const u = await prisma.unit.findFirstOrThrow();
+    expect(u.floor).toBe("5");
+    expect(u.slotNo).toBe("P1");
+  });
+
   it("keeps historical leases: same unit across two year sheets -> 1 unit, 2 leases", async () => {
     const buf = await workbook({
       "2023": [L({ start: new Date("2023-01-01"), end: new Date("2023-12-31") })],
