@@ -34,23 +34,49 @@ async function loadParse(buffer) {
 export async function analyzeWorkbook(buffer) {
   const { sheetMeta, rows } = await loadParse(buffer);
   const towerByName = new Map((await prisma.tower.findMany()).map((t) => [t.name, t.id]));
+  const now = new Date();
   const totals = { willCreate: 0, willUpdate: 0, skipped: 0, failed: 0 };
   const failures = [];
-  const ownerKeys = new Set(); const unitKeysActive = new Map(); const seen = new Set();
+  const ownerReviewKeys = new Set();
+  const seen = new Set();
+  const ownerIdByKey = new Map();
+  async function resolveOwnerId(nameKey) {
+    if (ownerIdByKey.has(nameKey)) return ownerIdByKey.get(nameKey);
+    const o = await prisma.unitOwner.findUnique({ where: { nameKey }, select: { id: true } });
+    const id = o?.id ?? null; ownerIdByKey.set(nameKey, id); return id;
+  }
+  const unitGroups = new Map(); // gKey -> { existingUnitId, periods: [[start,end]] }
   for (const row of rows) {
     const c = classify(row, seen);
     if (c.kind === "skip") { totals.skipped++; continue; }
     if (c.kind === "fail") { totals.failed++; failures.push({ sheet: row.sheet, row: row.row, reasons: c.reasons }); continue; }
+    const ownerKey = key(row.lessor || "Unknown Owner");
+    if (ownerNeedsReview(row.lessor)) ownerReviewKeys.add(ownerKey);
+    const ownerId = await resolveOwnerId(ownerKey);
     const towerId = towerByName.get(towerNameFor(row.property)) ?? null;
     const unitKey = `${key(row.property)}|${key(row.unitNumber)}|${towerId ?? ""}`;
-    const existing = await prisma.lease.findFirst({ where: { unit: { unitKey }, tenant: { nameKey: key(row.lessee) }, startDate: row.startDate, endDate: row.endDate }, select: { id: true } });
-    if (existing) totals.willUpdate++; else totals.willCreate++;
-    if (ownerNeedsReview(row.lessor)) ownerKeys.add(`REVIEW:${key(row.lessor || "unknown owner")}`);
-    const active = row.startDate <= new Date() && row.endDate >= new Date();
-    const prev = unitKeysActive.get(unitKey) || false; unitKeysActive.set(unitKey, prev || active);
+    let existingUnitId = null; let existingLease = null;
+    if (ownerId) {
+      const unit = await prisma.unit.findUnique({ where: { ownerId_unitKey: { ownerId, unitKey } }, select: { id: true } });
+      existingUnitId = unit?.id ?? null;
+      if (existingUnitId) existingLease = await prisma.lease.findFirst({ where: { unitId: existingUnitId, tenant: { nameKey: key(row.lessee) }, startDate: row.startDate, endDate: row.endDate }, select: { id: true } });
+    }
+    if (existingLease) totals.willUpdate++; else totals.willCreate++;
+    const gKey = `${ownerId ?? "NEW:" + ownerKey}|${unitKey}`;
+    let g = unitGroups.get(gKey);
+    if (!g) { g = { existingUnitId, periods: [] }; unitGroups.set(gKey, g); }
+    g.periods.push([row.startDate, row.endDate]);
   }
-  const unitsNeedingStatusReview = [...unitKeysActive.values()].filter((v) => !v).length;
-  return { totals, sheets: sheetMeta, failures, ownersNeedingReview: ownerKeys.size, unitsNeedingStatusReview };
+  let unitsNeedingStatusReview = 0;
+  for (const g of unitGroups.values()) {
+    const periods = [...g.periods];
+    if (g.existingUnitId) {
+      const dbLeases = await prisma.lease.findMany({ where: { unitId: g.existingUnitId }, select: { startDate: true, endDate: true } });
+      for (const l of dbLeases) periods.push([l.startDate, l.endDate]);
+    }
+    if (!periods.some(([s, e]) => s <= now && e >= now)) unitsNeedingStatusReview++;
+  }
+  return { totals, sheets: sheetMeta, failures, ownersNeedingReview: ownerReviewKeys.size, unitsNeedingStatusReview };
 }
 
 export async function commitWorkbook(buffer) {
@@ -106,10 +132,14 @@ export async function commitWorkbook(buffer) {
   // Status pass: never auto-VACANT. Active lease (now within [start,end]) -> OCCUPIED; else flag for review.
   const now = new Date();
   for (const unitId of affectedUnitIds) {
-    const leases = await prisma.unit.findUnique({ where: { id: unitId }, select: { leases: { select: { startDate: true, endDate: true } } } });
-    const active = leases.leases.some((l) => l.startDate <= now && l.endDate >= now);
-    if (active) await prisma.unit.update({ where: { id: unitId }, data: { status: "OCCUPIED", needsStatusReview: false } });
-    else { await prisma.unit.update({ where: { id: unitId }, data: { needsStatusReview: true } }); summary.unitsFlagged++; }
+    const u = await prisma.unit.findUnique({ where: { id: unitId }, select: { status: true, needsStatusReview: true, leases: { select: { startDate: true, endDate: true } } } });
+    const active = u.leases.some((l) => l.startDate <= now && l.endDate >= now);
+    if (active) {
+      if (u.status !== "OCCUPIED" || u.needsStatusReview) await prisma.unit.update({ where: { id: unitId }, data: { status: "OCCUPIED", needsStatusReview: false } });
+    } else {
+      if (!u.needsStatusReview) await prisma.unit.update({ where: { id: unitId }, data: { needsStatusReview: true } });
+      summary.unitsFlagged++;
+    }
   }
   return summary;
 }

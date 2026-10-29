@@ -51,6 +51,38 @@ describe("analyzeWorkbook (preview — no writes)", () => {
     expect(res.totals.failed).toBe(2);
     expect(res.failures.map((f) => f.row).length).toBe(2);
   });
+  it("flags an unparseable Start date (rawStart present, startDate unparseable)", async () => {
+    const buf = await wbuf([R({ unit: "6D", start: "not a date" })]);
+    const res = await analyzeWorkbook(buf);
+    expect(res.totals.failed).toBe(1);
+    expect(res.failures[0].reasons.some((r) => /unparseable/i.test(r))).toBe(true);
+  });
+  it("flags an in-file duplicate row (same unit/lessee/start/end)", async () => {
+    const dup = R({ unit: "6D" });
+    const buf = await wbuf([dup, { ...dup }]);
+    const res = await analyzeWorkbook(buf);
+    expect(res.totals.willCreate).toBe(1);
+    expect(res.totals.failed).toBe(1);
+    expect(res.failures[0].reasons.some((r) => /duplicate/i.test(r))).toBe(true);
+  });
+});
+
+describe("analyzeWorkbook (preview parity with commit)", () => {
+  it("willCreate/willUpdate match commit's owner-scoped lookup (not a global unitKey match)", async () => {
+    const ownerA = await wbuf([R({ unit: "6D", lessor: "Owner A" })]);
+    await commitWorkbook(ownerA);
+    const ownerB = await wbuf([R({ unit: "6D", lessor: "Owner B" })]);
+    const res = await analyzeWorkbook(ownerB);
+    expect(res.totals.willCreate).toBe(1);
+    expect(res.totals.willUpdate).toBe(0);
+  });
+  it("unitsNeedingStatusReview unions in-file rows with the unit's existing DB leases", async () => {
+    const active = await wbuf([R({ unit: "9Z", lessor: "Owner A", ...ACTIVE })]);
+    await commitWorkbook(active);
+    const onlyPast = await wbuf([R({ unit: "9Z", lessor: "Owner A", ...PAST })]);
+    const res = await analyzeWorkbook(onlyPast);
+    expect(res.unitsNeedingStatusReview).toBe(0);
+  });
 });
 
 describe("commitWorkbook", () => {
