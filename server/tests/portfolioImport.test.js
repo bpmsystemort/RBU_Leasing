@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { createRequire } from "module";
-import { resetCrudTables } from "./helpers.js";
+import { resetCrudTables, tokens } from "./helpers.js";
+import request from "supertest";
+import { createApp } from "../src/app.js";
 import { prisma } from "../src/lib/prisma.js";
 import { importWorkbook } from "../src/services/portfolioImportService.js";
 
@@ -82,5 +84,30 @@ describe("portfolio import — idempotent", () => {
     await importWorkbook(buf);
     expect(await prisma.unitOwner.count()).toBe(1);
     expect(await prisma.tenant.count()).toBe(1);
+  });
+});
+
+const app = createApp();
+
+describe("portfolio import — endpoint", () => {
+  const XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+
+  it("ADMIN upload returns a summary; an officer is refused", async () => {
+    const buf = await workbook({ "2024": [L()] });
+    const ok = await request(app).post("/api/import/portfolio")
+      .set("Authorization", `Bearer ${tokens.admin()}`)
+      .attach("file", buf, { filename: "portfolio.xlsx", contentType: XLSX });
+    expect(ok.status).toBe(200);
+    expect(ok.body).toMatchObject({ owners: 1, units: 1, leases: 1 });
+
+    const forbidden = await request(app).post("/api/import/portfolio")
+      .set("Authorization", `Bearer ${tokens.officer()}`)
+      .attach("file", buf, { filename: "portfolio.xlsx", contentType: XLSX });
+    expect(forbidden.status).toBe(403);
+  });
+
+  it("rejects a request with no file (400)", async () => {
+    const res = await request(app).post("/api/import/portfolio").set("Authorization", `Bearer ${tokens.admin()}`);
+    expect(res.status).toBe(400);
   });
 });
