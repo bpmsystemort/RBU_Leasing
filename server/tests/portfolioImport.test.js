@@ -121,6 +121,20 @@ describe("commitWorkbook", () => {
     expect(u2.needsStatusReview).toBe(false);
     expect(u2.status).toBe("OCCUPIED");
   });
+  it("collapses short/long building spellings of the same tower into one unit", async () => {
+    // towerNameFor maps both "Ibiza" (2023/2024 short form) and "CV Ibiza Tower"
+    // (2025/2026 full form) to the same seeded "Ibiza Tower" -> same tower id ->
+    // same unit, even though the raw building text differs.
+    const estate = await prisma.estate.create({ data: { name: "Circulo Verde" } });
+    await prisma.tower.create({ data: { name: "Ibiza Tower", estateId: estate.id } });
+    const buf = await wbuf([
+      R({ unit: "19A", property: "Ibiza", start: new Date("2023-01-01"), end: new Date("2023-12-31") }),
+      R({ unit: "19A", property: "CV Ibiza Tower", start: new Date("2024-01-01"), end: new Date("2024-12-31") }),
+    ]);
+    await commitWorkbook(buf);
+    expect(await prisma.unit.count()).toBe(1);
+    expect(await prisma.lease.count()).toBe(2);
+  });
 });
 
 const app = createApp();

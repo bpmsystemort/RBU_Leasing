@@ -6,6 +6,12 @@ import { parseFromBuffer } from "../lib/importParse.js";
 const JOINT = /\b and \b|&|\bspouses?\b|\/|\bc\/o\b|\bet al\b/i;
 const ownerNeedsReview = (name) => !name || JOINT.test(name);
 
+function unitKeyOf(property, unitNumber, towerId) {
+  // When a tower resolves, key on the tower (not the raw building text) so short/long
+  // building spellings for the same tower don't split into separate units.
+  return towerId ? `T:${towerId}|${key(unitNumber)}` : `${key(property)}|${key(unitNumber)}`;
+}
+
 // Classify one parsed row. Returns { kind: "skip"|"fail"|"ok", reasons?, key? }
 function classify(row, seen) {
   const blank = !row.unitNumber && !row.lessee && !row.lessor && row.rawStart == null && row.rawEnd == null && row.monthlyRent == null;
@@ -54,7 +60,7 @@ export async function analyzeWorkbook(buffer) {
     if (ownerNeedsReview(row.lessor)) ownerReviewKeys.add(ownerKey);
     const ownerId = await resolveOwnerId(ownerKey);
     const towerId = towerByName.get(towerNameFor(row.property)) ?? null;
-    const unitKey = `${key(row.property)}|${key(row.unitNumber)}|${towerId ?? ""}`;
+    const unitKey = unitKeyOf(row.property, row.unitNumber, towerId);
     let existingUnitId = null; let existingLease = null;
     if (ownerId) {
       const unit = await prisma.unit.findUnique({ where: { ownerId_unitKey: { ownerId, unitKey } }, select: { id: true } });
@@ -111,7 +117,7 @@ export async function commitWorkbook(buffer) {
     }
 
     const towerId = towerByName.get(towerNameFor(row.property)) ?? null;
-    const unitKey = `${key(row.property)}|${key(row.unitNumber)}|${towerId ?? ""}`;
+    const unitKey = unitKeyOf(row.property, row.unitNumber, towerId);
     const uMapKey = `${ownerId}|${unitKey}`;
     let unitId = units.get(uMapKey);
     if (unitId === undefined) {
