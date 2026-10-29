@@ -134,11 +134,8 @@ export const lessorRequirements = {
 
 // Admin bulk portfolio upload (.xlsx) — see PortfolioImportView.
 export const portfolioImport = {
-  upload: (file) => {
-    const form = new FormData();
-    form.append("file", file);
-    return api.post("/import/portfolio", form).then((r) => r.data);
-  },
+  preview: (file) => { const f = new FormData(); f.append("file", file); return api.post("/import/portfolio/preview", f).then((r) => r.data); },
+  commit: (file) => { const f = new FormData(); f.append("file", file); return api.post("/import/portfolio/commit", f).then((r) => r.data); },
 };
 
 // The lessee's document checklist — the mirror of lessorRequirements above.

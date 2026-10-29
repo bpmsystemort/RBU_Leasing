@@ -1,33 +1,34 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { mount, flushPromises } from "@vue/test-utils";
-
 vi.mock("../src/lib/resource.js", () => ({
-  portfolioImport: { upload: vi.fn(() => Promise.resolve({ owners: 3, units: 5, tenants: 4, leases: 9, skipped: 2, skips: [] })) },
+  portfolioImport: {
+    preview: vi.fn(() => Promise.resolve({ totals: { willCreate: 5, willUpdate: 2, skipped: 1, failed: 1 }, sheets: [{ name: "2026", ok: true }], failures: [{ sheet: "2026", row: 9, reasons: ["missing Lessee"] }], ownersNeedingReview: 3, unitsNeedingStatusReview: 4 })),
+    commit: vi.fn(() => Promise.resolve({ created: 5, updated: 2, skipped: 1, failed: 1, ownersFlagged: 3, unitsFlagged: 4, failures: [] })),
+  },
 }));
-
 import PortfolioImportView from "../src/views/PortfolioImportView.vue";
 import { portfolioImport } from "../src/lib/resource.js";
-
-const file = new File(["x"], "portfolio.xlsx", { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+const file = new File(["x"], "p.xlsx", { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+async function pick(w) { const i = w.find('input[type="file"]'); Object.defineProperty(i.element, "files", { value: [file] }); await i.trigger("change"); }
+const btn = (w, re) => w.findAll("button").find((b) => re.test(b.text()));
 
 describe("PortfolioImportView", () => {
-  beforeEach(() => { portfolioImport.upload.mockClear(); });
-
-  it("uploads the chosen file and shows the summary", async () => {
+  beforeEach(() => { portfolioImport.preview.mockClear(); portfolioImport.commit.mockClear(); });
+  it("previews then shows totals and a failure, then commits", async () => {
     const w = mount(PortfolioImportView);
-    const input = w.find('input[type="file"]');
-    Object.defineProperty(input.element, "files", { value: [file] });
-    await input.trigger("change");
-    await w.findAll("button").find((b) => /import/i.test(b.text())).trigger("click");
+    await pick(w);
+    await btn(w, /preview/i).trigger("click");
     await flushPromises();
-    expect(portfolioImport.upload).toHaveBeenCalledWith(file);
-    expect(w.text()).toMatch(/5/); // units
-    expect(w.text()).toMatch(/9/); // leases
+    expect(portfolioImport.preview).toHaveBeenCalledWith(file);
+    expect(w.text()).toMatch(/missing Lessee/);
+    expect(w.text()).toMatch(/5/);
+    await btn(w, /confirm/i).trigger("click");
+    await flushPromises();
+    expect(portfolioImport.commit).toHaveBeenCalledWith(file);
+    expect(w.text()).toMatch(/import complete|created/i);
   });
-
-  it("disables import until a file is chosen", async () => {
+  it("disables Preview until a file is chosen", () => {
     const w = mount(PortfolioImportView);
-    const btn = w.findAll("button").find((b) => /import/i.test(b.text()));
-    expect(btn.attributes("disabled")).toBeDefined();
+    expect(btn(w, /preview/i).attributes("disabled")).toBeDefined();
   });
 });
