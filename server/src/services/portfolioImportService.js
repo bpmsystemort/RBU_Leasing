@@ -1,105 +1,120 @@
-import { createRequire } from "module";
 import { prisma } from "../lib/prisma.js";
-import { text, money, toDate, leaseStatus, key } from "../lib/importClean.js";
+import { key, leaseStatus } from "../lib/importClean.js";
 import { towerNameFor } from "../lib/towerMap.js";
+import { parseFromBuffer } from "../lib/importParse.js";
 
-const require = createRequire(import.meta.url);
-const ExcelJS = require("exceljs");
+const JOINT = /\b and \b|&|\bspouses?\b|\/|\bc\/o\b|\bet al\b/i;
+const ownerNeedsReview = (name) => !name || JOINT.test(name);
 
-const isYearSheet = (name) => /^\d{4}$/.test(String(name).trim());
+// Classify one parsed row. Returns { kind: "skip"|"fail"|"ok", reasons?, key? }
+function classify(row, seen) {
+  const blank = !row.unitNumber && !row.lessee && !row.lessor && row.rawStart == null && row.rawEnd == null && row.monthlyRent == null;
+  if (blank) return { kind: "skip" };
+  const reasons = [];
+  if (!row.unitNumber) reasons.push("missing Unit");
+  if (!row.lessee) reasons.push("missing Lessee");
+  if (row.rawStart == null) reasons.push("missing Start date"); else if (!row.startDate) reasons.push("unparseable Start date");
+  if (row.rawEnd == null) reasons.push("missing End date"); else if (!row.endDate) reasons.push("unparseable End date");
+  if (row.monthlyRent == null) reasons.push("missing/invalid Monthly Rent");
+  if (row.startDate && row.endDate && row.startDate.getTime() > row.endDate.getTime()) reasons.push("Start date after End date");
+  if (reasons.length) return { kind: "fail", reasons };
+  const dupKey = `${key(row.property)}|${key(row.unitNumber)}|${key(row.lessee)}|${row.startDate.toISOString()}|${row.endDate.toISOString()}`;
+  if (seen.has(dupKey)) return { kind: "fail", reasons: ["duplicate row within file"] };
+  seen.add(dupKey);
+  return { kind: "ok" };
+}
 
-export async function importWorkbook(buffer) {
-  const wb = new ExcelJS.Workbook();
-  await wb.xlsx.load(buffer);
+async function loadParse(buffer) {
+  const { sheets } = await parseFromBuffer(buffer);
+  const sheetMeta = sheets.map((s) => ({ name: s.name, ok: s.ok, error: s.error }));
+  const rows = sheets.filter((s) => s.ok).flatMap((s) => s.rows);
+  return { sheetMeta, rows };
+}
 
+export async function analyzeWorkbook(buffer) {
+  const { sheetMeta, rows } = await loadParse(buffer);
   const towerByName = new Map((await prisma.tower.findMany()).map((t) => [t.name, t.id]));
-  const owners = new Map();  // nameKey -> ownerId
-  const tenants = new Map();  // nameKey -> tenantId
-  const units = new Map();   // `${ownerId}|${unitKey}` -> unitId
-  const summary = { owners: 0, units: 0, tenants: 0, leases: 0, skipped: 0, skips: [] };
-  const now = new Date();
+  const totals = { willCreate: 0, willUpdate: 0, skipped: 0, failed: 0 };
+  const failures = [];
+  const ownerKeys = new Set(); const unitKeysActive = new Map(); const seen = new Set();
+  for (const row of rows) {
+    const c = classify(row, seen);
+    if (c.kind === "skip") { totals.skipped++; continue; }
+    if (c.kind === "fail") { totals.failed++; failures.push({ sheet: row.sheet, row: row.row, reasons: c.reasons }); continue; }
+    const towerId = towerByName.get(towerNameFor(row.property)) ?? null;
+    const unitKey = `${key(row.property)}|${key(row.unitNumber)}|${towerId ?? ""}`;
+    const existing = await prisma.lease.findFirst({ where: { unit: { unitKey }, tenant: { nameKey: key(row.lessee) }, startDate: row.startDate, endDate: row.endDate }, select: { id: true } });
+    if (existing) totals.willUpdate++; else totals.willCreate++;
+    if (ownerNeedsReview(row.lessor)) ownerKeys.add(`REVIEW:${key(row.lessor || "unknown owner")}`);
+    const active = row.startDate <= new Date() && row.endDate >= new Date();
+    const prev = unitKeysActive.get(unitKey) || false; unitKeysActive.set(unitKey, prev || active);
+  }
+  const unitsNeedingStatusReview = [...unitKeysActive.values()].filter((v) => !v).length;
+  return { totals, sheets: sheetMeta, failures, ownersNeedingReview: ownerKeys.size, unitsNeedingStatusReview };
+}
 
-  for (const ws of wb.worksheets.filter((w) => isYearSheet(w.name))) {
-    for (let r = 2; r <= ws.rowCount; r++) {
-      const v = ws.getRow(r).values; // exceljs 1-indexed; v[1] ignored
-      const building = text(v[3]);
-      const unitNumber = text(v[4]);
-      const unitType = text(v[5]) || "OTHER";
-      const floor = text(v[6]);
-      const slotNo = text(v[7]);
-      const lessor = text(v[8]);
-      const lessee = text(v[9]);
-      const startDate = toDate(v[10]);
-      const endDate = toDate(v[11]);
-      const monthlyRent = money(v[13]);
+export async function commitWorkbook(buffer) {
+  const { sheetMeta, rows } = await loadParse(buffer);
+  const towerByName = new Map((await prisma.tower.findMany()).map((t) => [t.name, t.id]));
+  const owners = new Map(); const tenants = new Map(); const units = new Map();
+  const summary = { created: 0, updated: 0, skipped: 0, failed: 0, ownersFlagged: 0, unitsFlagged: 0, failures: [], sheets: sheetMeta };
+  const seen = new Set(); const affectedUnitIds = new Set();
 
-      if (!lessee || !unitNumber || !startDate || !endDate || monthlyRent == null) {
-        if (lessee || unitNumber) { summary.skipped++; summary.skips.push({ sheet: ws.name, row: r, lessee, unitNumber }); }
-        continue;
-      }
+  for (const row of rows) {
+    const c = classify(row, seen);
+    if (c.kind === "skip") { summary.skipped++; continue; }
+    if (c.kind === "fail") { summary.failed++; summary.failures.push({ sheet: row.sheet, row: row.row, reasons: c.reasons }); continue; }
 
-      // Owner — matched by normalized name; NEVER creates a User.
-      const ownerName = lessor || "Unknown Owner";
-      const ownerKey = key(ownerName);
-      let ownerId = owners.get(ownerKey);
-      if (ownerId === undefined) {
-        let owner = await prisma.unitOwner.findUnique({ where: { nameKey: ownerKey } });
-        if (!owner) { owner = await prisma.unitOwner.create({ data: { name: ownerName, nameKey: ownerKey } }); summary.owners++; }
-        ownerId = owner.id; owners.set(ownerKey, ownerId);
-      }
-
-      // Tenant — matched by normalized name (keeps tenantId stable across re-imports).
-      const tKey = key(lessee);
-      let tenantId = tenants.get(tKey);
-      if (tenantId === undefined) {
-        let tenant = await prisma.tenant.findUnique({ where: { nameKey: tKey } });
-        if (!tenant) { tenant = await prisma.tenant.create({ data: { name: lessee, nameKey: tKey } }); summary.tenants++; }
-        tenantId = tenant.id; tenants.set(tKey, tenantId);
-      }
-
-      // Unit — matched by owner + normalized building/unit/tower.
-      const towerId = towerByName.get(towerNameFor(building)) ?? null;
-      const unitKey = `${key(building)}|${key(unitNumber)}|${towerId ?? ""}`;
-      const uMapKey = `${ownerId}|${unitKey}`;
-      let unitId = units.get(uMapKey);
-      if (unitId === undefined) {
-        let unit = await prisma.unit.findUnique({ where: { ownerId_unitKey: { ownerId, unitKey } } });
-        const descriptive = { floor, slotNo, type: unitType, baseRent: monthlyRent }; // key fields never change
-        if (unit) {
-          // Only apply non-null values: a blank cell on re-import must never erase a
-          // previously populated (or portal-edited) field.
-          const updates = Object.fromEntries(Object.entries(descriptive).filter(([, v]) => v != null));
-          if (Object.keys(updates).length) await prisma.unit.update({ where: { id: unit.id }, data: updates });
-        } else {
-          unit = await prisma.unit.create({ data: { ownerId, unitKey, unitNumber, building, towerId, status: "OCCUPIED", ...descriptive } });
-          summary.units++;
-        }
-        unitId = unit.id; units.set(uMapKey, unitId);
-      }
-
-      // Lease — natural key (unit, tenant, start, end).
-      const leaseData = {
-        monthlyRent, status: leaseStatus(endDate, now),
-        advanceRent: text(v[14]), securityDeposit: text(v[15]), modeOfPayment: text(v[16]),
-        serviceFee: text(v[17]), source: text(v[18]), remarks: text(v[19]),
-        renewalPeriod: text(v[12]), managedBy: text(v[2]),
-      };
-      const existing = await prisma.lease.findUnique({
-        where: { unitId_tenantId_startDate_endDate: { unitId, tenantId, startDate, endDate } },
-        select: { id: true },
-      });
-      if (existing) {
-        await prisma.lease.update({ where: { id: existing.id }, data: leaseData });
-      } else {
-        await prisma.lease.create({ data: { unitId, tenantId, startDate, endDate, ...leaseData } });
-        summary.leases++;
-      }
+    const ownerName = row.lessor || "Unknown Owner";
+    const ownerKey = key(ownerName);
+    let ownerId = owners.get(ownerKey);
+    if (ownerId === undefined) {
+      let owner = await prisma.unitOwner.findUnique({ where: { nameKey: ownerKey } });
+      const needsReview = ownerNeedsReview(row.lessor);
+      if (!owner) { owner = await prisma.unitOwner.create({ data: { name: ownerName, nameKey: ownerKey, needsReview } }); if (needsReview) summary.ownersFlagged++; }
+      else if (needsReview && !owner.needsReview) { await prisma.unitOwner.update({ where: { id: owner.id }, data: { needsReview: true } }); summary.ownersFlagged++; }
+      ownerId = owner.id; owners.set(ownerKey, ownerId);
     }
+
+    const tKey = key(row.lessee);
+    let tenantId = tenants.get(tKey);
+    if (tenantId === undefined) {
+      let tenant = await prisma.tenant.findUnique({ where: { nameKey: tKey } });
+      if (!tenant) tenant = await prisma.tenant.create({ data: { name: row.lessee, nameKey: tKey } });
+      tenantId = tenant.id; tenants.set(tKey, tenantId);
+    }
+
+    const towerId = towerByName.get(towerNameFor(row.property)) ?? null;
+    const unitKey = `${key(row.property)}|${key(row.unitNumber)}|${towerId ?? ""}`;
+    const uMapKey = `${ownerId}|${unitKey}`;
+    let unitId = units.get(uMapKey);
+    if (unitId === undefined) {
+      let unit = await prisma.unit.findUnique({ where: { ownerId_unitKey: { ownerId, unitKey } } });
+      const descriptive = Object.fromEntries(Object.entries({ floor: row.floor, slotNo: row.slotNo, type: row.unitType, baseRent: row.monthlyRent }).filter(([, v]) => v != null));
+      if (unit) await prisma.unit.update({ where: { id: unit.id }, data: descriptive });
+      else unit = await prisma.unit.create({ data: { ownerId, unitKey, unitNumber: row.unitNumber, building: row.property, towerId, status: "OCCUPIED", ...descriptive } });
+      unitId = unit.id; units.set(uMapKey, unitId);
+    }
+    affectedUnitIds.add(unitId);
+
+    const leaseData = { monthlyRent: row.monthlyRent, status: leaseStatus(row.endDate, new Date()), advanceRent: row.advanceRent, securityDeposit: row.securityDeposit, modeOfPayment: row.modeOfPayment, serviceFee: row.serviceFee, source: row.source, remarks: row.remarks, renewalPeriod: row.renewalText, managedBy: row.managedBy };
+    const existing = await prisma.lease.findUnique({ where: { unitId_tenantId_startDate_endDate: { unitId, tenantId, startDate: row.startDate, endDate: row.endDate } }, select: { id: true } });
+    if (existing) { await prisma.lease.update({ where: { id: existing.id }, data: leaseData }); summary.updated++; }
+    else { await prisma.lease.create({ data: { unitId, tenantId, startDate: row.startDate, endDate: row.endDate, ...leaseData } }); summary.created++; }
+  }
+
+  // Status pass: never auto-VACANT. Active lease (now within [start,end]) -> OCCUPIED; else flag for review.
+  const now = new Date();
+  for (const unitId of affectedUnitIds) {
+    const leases = await prisma.unit.findUnique({ where: { id: unitId }, select: { leases: { select: { startDate: true, endDate: true } } } });
+    const active = leases.leases.some((l) => l.startDate <= now && l.endDate >= now);
+    if (active) await prisma.unit.update({ where: { id: unitId }, data: { status: "OCCUPIED", needsStatusReview: false } });
+    else { await prisma.unit.update({ where: { id: unitId }, data: { needsStatusReview: true } }); summary.unitsFlagged++; }
   }
   return summary;
 }
 
-export async function importFromFile(path) {
+export async function commitFromFile(path) {
   const { readFile } = await import("fs/promises");
-  return importWorkbook(await readFile(path));
+  return commitWorkbook(await readFile(path));
 }
