@@ -6,9 +6,9 @@ import { createRouter, createMemoryHistory } from "vue-router";
 vi.mock("../src/lib/resource.js", () => ({
   units: {
     list: vi.fn(() => Promise.resolve([
-      { id: "u1", unitNumber: "12A", baseRent: "45000", status: "VACANT",
+      { id: "u1", unitNumber: "12A", baseRent: "45000", status: "VACANT", needsStatusReview: true,
         tower: { id: "t1", name: "Tower One", estate: { id: "e1", name: "Estate Alpha" } } },
-      { id: "u2", unitNumber: "7B", baseRent: "30000", status: "OCCUPIED",
+      { id: "u2", unitNumber: "7B", baseRent: "30000", status: "OCCUPIED", needsStatusReview: false,
         tower: { id: "t2", name: "Tower Two", estate: { id: "e2", name: "Estate Beta" } } },
     ])),
     remove: vi.fn(() => Promise.resolve()),
@@ -69,6 +69,24 @@ describe("UnitsView", () => {
     await estateBtn.trigger("click");
     const alpha = w.findAll(".ms__opt").find((l) => l.text() === "Estate Alpha");
     await alpha.find("input").setValue(true);
+    await flushPromises();
+    const bodyText = w.find("tbody").text();
+    expect(bodyText).toContain("12A");
+    expect(bodyText).not.toContain("7B");
+  });
+
+  it("shows a Needs status review badge only on the flagged unit", async () => {
+    const w = await mountView("VIEWER");
+    const rows = w.findAll("tbody tr");
+    expect(rows).toHaveLength(2);
+    expect(rows[0].find(".review-tag").text()).toBe("Needs status review"); // 12A
+    expect(rows[1].find(".review-tag").exists()).toBe(false); // 7B — not flagged
+  });
+
+  it("narrows the table to flagged units via the filter checkbox", async () => {
+    const w = await mountView("VIEWER");
+    expect(w.findAll("tbody tr")).toHaveLength(2);
+    await w.find(".flag-filter input").setValue(true);
     await flushPromises();
     const bodyText = w.find("tbody").text();
     expect(bodyText).toContain("12A");

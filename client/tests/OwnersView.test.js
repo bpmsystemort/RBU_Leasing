@@ -5,7 +5,10 @@ import { createRouter, createMemoryHistory } from "vue-router";
 
 vi.mock("../src/lib/resource.js", () => ({
   owners: {
-    list: vi.fn(() => Promise.resolve([{ id: "1", name: "Ayala", email: "a@x.com", phone: "1" }])),
+    list: vi.fn(() => Promise.resolve([
+      { id: "1", name: "Ayala", email: "a@x.com", phone: "1", needsReview: false },
+      { id: "2", name: "Unverified Co.", email: null, phone: null, needsReview: true },
+    ])),
     remove: vi.fn(() => Promise.resolve()),
   },
 }));
@@ -54,5 +57,23 @@ describe("OwnersView", () => {
     await nameLink.trigger("click");
     await flushPromises();
     expect(w.vm.$router.currentRoute.value.fullPath).toBe("/app/lessor-profile/1");
+  });
+
+  it("shows a Needs review badge only on the flagged owner", async () => {
+    const w = await mountView("VIEWER");
+    const rows = w.findAll("tbody tr");
+    expect(rows).toHaveLength(2);
+    expect(rows[0].find(".review-tag").exists()).toBe(false); // Ayala — not flagged
+    expect(rows[1].find(".review-tag").text()).toBe("Needs review"); // Unverified Co.
+  });
+
+  it("narrows the list to flagged owners via the filter checkbox", async () => {
+    const w = await mountView("VIEWER");
+    expect(w.findAll("tbody tr")).toHaveLength(2);
+    await w.find(".flag-filter input").setValue(true);
+    await flushPromises();
+    const bodyText = w.find("tbody").text();
+    expect(bodyText).not.toContain("Ayala");
+    expect(bodyText).toContain("Unverified Co.");
   });
 });

@@ -3,8 +3,8 @@ import { unitCreateSchema, unitUpdateSchema, unitRejectSchema } from "../validat
 
 export async function list(req, res, next) {
   try {
-    const { ownerId, status, estateId, towerId, approvalStatus } = req.query;
-    res.json(await service.listUnitsForUser(req.user, { ownerId, status, estateId, towerId, approvalStatus }));
+    const { ownerId, status, estateId, towerId, approvalStatus, needsStatusReview } = req.query;
+    res.json(await service.listUnitsForUser(req.user, { ownerId, status, estateId, towerId, approvalStatus, needsStatusReview }));
   } catch (e) { next(e); }
 }
 export async function get(req, res, next) {

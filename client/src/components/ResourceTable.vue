@@ -18,7 +18,9 @@ const emit = defineEmits(["edit", "delete"]);
     <tbody>
       <tr v-for="row in rows" :key="row.id">
         <td v-for="c in columns" :key="c.key">
-          {{ c.format ? c.format(row[c.key]) : row[c.key] }}
+          <slot :name="`cell-${c.key}`" :row="row">
+            {{ c.format ? c.format(row[c.key]) : row[c.key] }}
+          </slot>
         </td>
         <td v-if="canWrite">
           <button type="button" class="edit" @click="emit('edit', row)">Edit</button>
