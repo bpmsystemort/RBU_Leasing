@@ -20,7 +20,7 @@ describe("getExpiringLeases", () => {
     await factory.lease(unitId, tenantId, { status: "ACTIVE", endDate: new Date("2026-07-20T00:00:00Z") }); // +35d -> within60
     await factory.lease(unitId, tenantId, { status: "ACTIVE", endDate: new Date("2026-08-20T00:00:00Z") }); // +66d -> within90
     await factory.lease(unitId, tenantId, { status: "ACTIVE", endDate: new Date("2026-10-01T00:00:00Z") }); // beyond 90d
-    await factory.lease(unitId, tenantId, { status: "EXPIRED", endDate: new Date("2026-06-25T00:00:00Z") }); // not ACTIVE
+    await factory.lease(unitId, tenantId, { status: "EXPIRED", startDate: new Date("2026-02-01T00:00:00Z"), endDate: new Date("2026-06-25T00:00:00Z") }); // not ACTIVE
     const exp = await getExpiringLeases(NOW);
     expect(exp).toEqual({ within30: 1, within60: 1, within90: 1 });
   });
