@@ -116,6 +116,7 @@ model UnitOwner {
   address    String?
   assignedOfficer   User?          @relation("OwnerOfficer", fields: [assignedOfficerId], references: [id], onDelete: SetNull)
   assignedOfficerId String?
+  needsReview Boolean               @default(false)
   units      Unit[]
   users      User[]
   lessorInfoSheets LessorInfoSheet[]
@@ -198,6 +199,7 @@ model Unit {
   status     UnitStatus @default(VACANT)
   approvalStatus UnitApprovalStatus @default(APPROVED)
   reviewRemarks  String?
+  needsStatusReview Boolean @default(false)
   leases     Lease[]
   leasingTransactions LeasingTransaction[]
   inquiries           Inquiry[]
