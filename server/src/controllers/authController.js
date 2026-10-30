@@ -1,10 +1,10 @@
 import {
   loginUser, registerUser, signupPortalUser, listUsers, updateUser, deleteUser,
   listPendingAccounts, approveAccount, rejectAccount, reviseAccount,
-  getApplication, resubmitApplication,
+  getApplication, resubmitApplication, suspendUser, restoreUser,
 } from "../services/authService.js";
 import {
-  registerSchema, signupSchema, updateUserSchema, rejectAccountSchema, reviseAccountSchema,
+  registerSchema, signupSchema, updateUserSchema, approveSchema, rejectAccountSchema, reviseAccountSchema,
   resubmitSchema,
 } from "../validation/user.js";
 
@@ -41,7 +41,11 @@ export async function pendingAccounts(req, res, next) {
 
 export async function approve(req, res, next) {
   try {
-    res.json(await approveAccount(req.params.id, req.user));
+    // Approving with no body at all is the common case (nothing to link to):
+    // req.body is left undefined rather than {} when the request carries no
+    // JSON payload, so default it before validating an all-optional schema.
+    const { existingUnitOwnerId } = approveSchema.parse(req.body || {});
+    res.json(await approveAccount(req.params.id, req.user, { existingUnitOwnerId }));
   } catch (err) { next(err); }
 }
 
@@ -76,6 +80,18 @@ export async function removeUser(req, res, next) {
   try {
     await deleteUser(req.params.id);
     res.status(204).end();
+  } catch (err) { next(err); }
+}
+
+export async function suspend(req, res, next) {
+  try {
+    res.json(await suspendUser(req.params.id));
+  } catch (err) { next(err); }
+}
+
+export async function restore(req, res, next) {
+  try {
+    res.json(await restoreUser(req.params.id));
   } catch (err) { next(err); }
 }
 

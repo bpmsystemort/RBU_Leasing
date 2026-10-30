@@ -5,6 +5,7 @@ import {
   InvalidReferenceError, NotFoundError, ConflictError, ValidationError,
 } from "../lib/errors.js";
 import { ensureForUnit } from "./leasingTransactionService.js";
+import { key } from "../lib/importClean.js";
 
 // The seeded super admin cannot be deleted or demoted from ADMIN.
 export const SUPER_ADMIN_EMAIL = "Admin";
@@ -53,14 +54,15 @@ export async function registerUser({ name, email, password, role, unitOwnerId, t
 
 export async function listUsers() {
   const users = await prisma.user.findMany({
-    // Only active, approved accounts belong in the system Users list. The
-    // Account Approvals queue is PENDING-only — a for-revision or rejected
-    // application lives in neither list; the applicant reads it from their
-    // own application-status page instead.
-    where: { status: "APPROVED" },
+    // Approved and suspended accounts both belong in the system Users list —
+    // a suspended account is still a managed login the admin needs to see and
+    // may restore. The Account Approvals queue is PENDING-only — a
+    // for-revision or rejected application lives in neither list; the
+    // applicant reads it from their own application-status page instead.
+    where: { status: { in: ["APPROVED", "SUSPENDED"] } },
     orderBy: { createdAt: "desc" },
     select: {
-      id: true, name: true, email: true, role: true, passwordPlain: true,
+      id: true, name: true, email: true, role: true, status: true, passwordPlain: true,
       unitOwnerId: true, tenantId: true, createdAt: true,
     },
   });
@@ -100,6 +102,29 @@ export async function deleteUser(id) {
   if (!user) throw new NotFoundError("user not found");
   if (user.email === SUPER_ADMIN_EMAIL) throw new ConflictError("the super admin cannot be deleted");
   await prisma.user.delete({ where: { id } });
+}
+
+function asStatusResult(user) {
+  return { id: user.id, name: user.name, email: user.email, status: user.status };
+}
+
+// A reversible alternative to deleteUser: the account, its credentials, and
+// any owner/tenant link all stay intact, but verifyJwt refuses every route
+// for it (the same closed-by-default gate a PENDING account hits) until an
+// admin restores it.
+export async function suspendUser(id) {
+  const user = await prisma.user.findUnique({ where: { id } });
+  if (!user) throw new NotFoundError("user not found");
+  if (user.email === SUPER_ADMIN_EMAIL) throw new ConflictError("the super admin cannot be suspended");
+  const updated = await prisma.user.update({ where: { id }, data: { status: "SUSPENDED" } });
+  return asStatusResult(updated);
+}
+
+export async function restoreUser(id) {
+  const user = await prisma.user.findUnique({ where: { id } });
+  if (!user) throw new NotFoundError("user not found");
+  const updated = await prisma.user.update({ where: { id }, data: { status: "APPROVED" } });
+  return asStatusResult(updated);
 }
 
 // Public self-registration for a lessor (UNIT_OWNER) or lessee (TENANT). The
@@ -162,12 +187,27 @@ const PENDING_SELECT = {
   pendingUnit: true,
 };
 
+// A hint only — it never auto-links. The officer still chooses whether to
+// treat this PENDING applicant as the same party as an already-imported
+// owner, via `existingUnitOwnerId` on approveAccount.
+async function suggestOwnerFor(row) {
+  if (row.role !== "UNIT_OWNER") return null;
+  return prisma.unitOwner.findFirst({
+    where: { nameKey: key(row.name) },
+    select: { id: true, name: true },
+  });
+}
+
 export async function listPendingAccounts() {
-  return prisma.user.findMany({
+  const rows = await prisma.user.findMany({
     where: { status: "PENDING" },
     orderBy: { createdAt: "asc" }, // oldest application first
     select: PENDING_SELECT,
   });
+  return Promise.all(rows.map(async (row) => ({
+    ...row,
+    suggestedOwner: (await suggestOwnerFor(row)) ?? null,
+  })));
 }
 
 // Approving is what actually brings the party into the business records: the
@@ -223,6 +263,7 @@ const STATUS_LABEL = {
   FOR_REVISION: "For Revision",
   APPROVED: "Approved",
   REJECTED: "Rejected",
+  SUSPENDED: "Suspended",
 };
 
 // Looks up the account and enforces that it is still open for a decision.
@@ -239,7 +280,12 @@ async function findDecidableAccount(id) {
   return user;
 }
 
-export async function approveAccount(id, approver) {
+// `existingUnitOwnerId` lets the officer link this applicant to an owner that
+// was already imported (e.g. from the legacy portfolio) instead of minting a
+// fresh UnitOwner row that would duplicate them. Omitting it keeps the
+// original behavior — a brand-new owner is created, as it always was before
+// imported owners existed to link to.
+export async function approveAccount(id, approver, { existingUnitOwnerId } = {}) {
   const user = await findDecidableAccount(id);
   const decidedBy = await approverName(approver);
 
@@ -253,11 +299,35 @@ export async function approveAccount(id, approver) {
       rejectionReason: null,
     };
     if (user.role === "UNIT_OWNER") {
-      const owner = await tx.unitOwner.create({ data: { name: user.name, email: user.contactEmail } });
-      data.unitOwnerId = owner.id;
+      let ownerId;
+      if (existingUnitOwnerId) {
+        const owner = await tx.unitOwner.findUnique({ where: { id: existingUnitOwnerId } });
+        if (!owner) throw new InvalidReferenceError("existingUnitOwnerId does not reference an existing owner");
+        // One owner, one active account. SUSPENDED counts as "has an
+        // account" too — the fix for a suspended duplicate is to restore the
+        // existing login, not to link a second one to the same owner.
+        const taken = await tx.user.findFirst({
+          where: {
+            unitOwnerId: owner.id,
+            status: { in: ["APPROVED", "PENDING", "FOR_REVISION", "SUSPENDED"] },
+            id: { not: id },
+          },
+        });
+        if (taken) throw new ConflictError("that owner already has an account");
+        ownerId = owner.id;
+        // Refresh the owner's contact email from the applicant who just
+        // proved they can be reached there.
+        if (user.contactEmail) {
+          await tx.unitOwner.update({ where: { id: owner.id }, data: { email: user.contactEmail } });
+        }
+      } else {
+        const owner = await tx.unitOwner.create({ data: { name: user.name, email: user.contactEmail } });
+        ownerId = owner.id;
+      }
+      data.unitOwnerId = ownerId;
       if (user.pendingUnit) {
         createdUnit = await tx.unit.create({
-          data: await buildPendingUnit(tx, owner.id, user.pendingUnit),
+          data: await buildPendingUnit(tx, ownerId, user.pendingUnit),
           include: { owner: true },
         });
         data.pendingUnit = null; // consumed
