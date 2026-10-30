@@ -39,21 +39,32 @@ export async function acceptInvite(token, password) {
   const invite = await liveInvite(token);
   const taken = await prisma.user.findFirst({ where: { unitOwnerId: invite.unitOwnerId, status: { in: ACTIVE_ACCOUNT_STATUSES } } });
   if (taken) throw new ConflictError("that owner already has an account");
-  const result = await prisma.$transaction(async (tx) => {
-    // The invite's email may collide with an existing User.email (unique) —
-    // e.g. a staff login or another owner already using that address.
-    if (await tx.user.findUnique({ where: { email: invite.email } })) {
-      throw new ConflictError("a user with that email already exists");
-    }
-    const user = await tx.user.create({ data: {
-      name: invite.unitOwner.name, email: invite.email, contactEmail: invite.email,
-      passwordHash: await hashPassword(password), passwordPlain: password,
-      role: "UNIT_OWNER", status: "APPROVED", unitOwnerId: invite.unitOwnerId,
-    } });
-    await tx.unitOwner.update({ where: { id: invite.unitOwnerId }, data: { email: invite.email } });
-    await tx.ownerInvite.update({ where: { id: invite.id }, data: { consumedAt: new Date() } });
-    return user;
-  });
+  let result;
+  try {
+    result = await prisma.$transaction(async (tx) => {
+      // The invite's email may collide with an existing User.email (unique) —
+      // e.g. a staff login or another owner already using that address.
+      if (await tx.user.findUnique({ where: { email: invite.email } })) {
+        throw new ConflictError("a user with that email already exists");
+      }
+      const user = await tx.user.create({ data: {
+        name: invite.unitOwner.name, email: invite.email, contactEmail: invite.email,
+        passwordHash: await hashPassword(password), passwordPlain: password,
+        role: "UNIT_OWNER", status: "APPROVED", unitOwnerId: invite.unitOwnerId,
+      } });
+      await tx.unitOwner.update({ where: { id: invite.unitOwnerId }, data: { email: invite.email } });
+      await tx.ownerInvite.update({ where: { id: invite.id }, data: { consumedAt: new Date() } });
+      return user;
+    });
+  } catch (err) {
+    // The findFirst check above is the friendly path for the common case, but
+    // it can't close the race: a concurrent accept/approve for the same owner
+    // can pass it under READ COMMITTED and then lose at the write. The partial
+    // unique index on User.unitOwnerId (see manual-migrations/
+    // 2026-10-30-one-active-account-per-owner.sql) is the backstop.
+    if (err?.code === "P2002") throw new ConflictError("that owner already has an account");
+    throw err;
+  }
   const token2 = issueToken({ id: result.id, role: result.role, unitOwnerId: result.unitOwnerId, status: "APPROVED" });
   return { token: token2, user: { id: result.id, name: result.name, email: result.email, role: result.role, unitOwnerId: result.unitOwnerId, status: result.status } };
 }

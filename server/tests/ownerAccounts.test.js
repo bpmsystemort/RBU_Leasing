@@ -365,3 +365,30 @@ describe("Owner invitations", () => {
     expect(res.status).toBe(403);
   });
 });
+
+// The app-level findFirst guards in approveAccount/acceptInvite are the
+// friendly path for the common case, but under concurrency (READ COMMITTED,
+// no lock) two requests can both pass the guard before either commits. This
+// proves the DB-level backstop — see manual-migrations/
+// 2026-10-30-one-active-account-per-owner.sql — actually enforces the
+// invariant regardless of what application code does.
+describe("DB backstop: one active account per owner", () => {
+  it("rejects a second active user linked to an owner that already has one, at the database level (P2002)", async () => {
+    const owner = await factory.owner({ name: "DB Backstop Owner" });
+    await prisma.user.create({
+      data: {
+        name: "First Login", email: "db.backstop.first@x.com", contactEmail: "db.backstop.first@x.com",
+        role: "UNIT_OWNER", status: "APPROVED", passwordHash: "x", passwordPlain: "x",
+        unitOwnerId: owner.id,
+      },
+    });
+
+    await expect(prisma.user.create({
+      data: {
+        name: "Second Login", email: "db.backstop.second@x.com", contactEmail: "db.backstop.second@x.com",
+        role: "UNIT_OWNER", status: "APPROVED", passwordHash: "x", passwordPlain: "x",
+        unitOwnerId: owner.id,
+      },
+    })).rejects.toMatchObject({ code: "P2002" });
+  });
+});

@@ -297,55 +297,67 @@ export async function approveAccount(id, approver, { existingUnitOwnerId } = {})
   const decidedBy = await approverName(approver);
 
   let createdUnit = null;
-  const result = await prisma.$transaction(async (tx) => {
-    const data = {
-      status: "APPROVED",
-      approvedById: approver.userId,
-      approvedByName: decidedBy,
-      decidedAt: new Date(),
-      rejectionReason: null,
-    };
-    if (user.role === "UNIT_OWNER") {
-      let ownerId;
-      if (existingUnitOwnerId) {
-        const owner = await tx.unitOwner.findUnique({ where: { id: existingUnitOwnerId } });
-        if (!owner) throw new InvalidReferenceError("existingUnitOwnerId does not reference an existing owner");
-        const taken = await tx.user.findFirst({
-          where: {
-            unitOwnerId: owner.id,
-            status: { in: ACTIVE_ACCOUNT_STATUSES },
-            id: { not: id },
-          },
-        });
-        if (taken) throw new ConflictError("that owner already has an account");
-        ownerId = owner.id;
-        // Refresh the owner's contact email from the applicant who just
-        // proved they can be reached there.
-        if (user.contactEmail) {
-          await tx.unitOwner.update({ where: { id: owner.id }, data: { email: user.contactEmail } });
+  let result;
+  try {
+    result = await prisma.$transaction(async (tx) => {
+      const data = {
+        status: "APPROVED",
+        approvedById: approver.userId,
+        approvedByName: decidedBy,
+        decidedAt: new Date(),
+        rejectionReason: null,
+      };
+      if (user.role === "UNIT_OWNER") {
+        let ownerId;
+        if (existingUnitOwnerId) {
+          const owner = await tx.unitOwner.findUnique({ where: { id: existingUnitOwnerId } });
+          if (!owner) throw new InvalidReferenceError("existingUnitOwnerId does not reference an existing owner");
+          const taken = await tx.user.findFirst({
+            where: {
+              unitOwnerId: owner.id,
+              status: { in: ACTIVE_ACCOUNT_STATUSES },
+              id: { not: id },
+            },
+          });
+          if (taken) throw new ConflictError("that owner already has an account");
+          ownerId = owner.id;
+          // Refresh the owner's contact email from the applicant who just
+          // proved they can be reached there.
+          if (user.contactEmail) {
+            await tx.unitOwner.update({ where: { id: owner.id }, data: { email: user.contactEmail } });
+          }
+        } else {
+          const owner = await tx.unitOwner.create({ data: { name: user.name, email: user.contactEmail } });
+          ownerId = owner.id;
         }
-      } else {
-        const owner = await tx.unitOwner.create({ data: { name: user.name, email: user.contactEmail } });
-        ownerId = owner.id;
+        data.unitOwnerId = ownerId;
+        if (user.pendingUnit) {
+          createdUnit = await tx.unit.create({
+            data: await buildPendingUnit(tx, ownerId, user.pendingUnit),
+            include: { owner: true },
+          });
+          data.pendingUnit = null; // consumed
+        }
+      } else if (user.role === "TENANT") {
+        const tenant = await tx.tenant.create({ data: { name: user.name, email: user.contactEmail } });
+        data.tenantId = tenant.id;
       }
-      data.unitOwnerId = ownerId;
-      if (user.pendingUnit) {
-        createdUnit = await tx.unit.create({
-          data: await buildPendingUnit(tx, ownerId, user.pendingUnit),
-          include: { owner: true },
-        });
-        data.pendingUnit = null; // consumed
-      }
-    } else if (user.role === "TENANT") {
-      const tenant = await tx.tenant.create({ data: { name: user.name, email: user.contactEmail } });
-      data.tenantId = tenant.id;
-    }
-    const updated = await tx.user.update({ where: { id }, data });
-    return {
-      id: updated.id, name: updated.name, email: updated.email, role: updated.role,
-      status: updated.status, unitOwnerId: updated.unitOwnerId, tenantId: updated.tenantId,
-    };
-  });
+      const updated = await tx.user.update({ where: { id }, data });
+      return {
+        id: updated.id, name: updated.name, email: updated.email, role: updated.role,
+        status: updated.status, unitOwnerId: updated.unitOwnerId, tenantId: updated.tenantId,
+      };
+    });
+  } catch (err) {
+    // The findFirst check above is the friendly path for the common case, but
+    // it can't close the race: two concurrent approvals for the same owner
+    // can both pass it under READ COMMITTED and then both try to write. The
+    // partial unique index on User.unitOwnerId (see manual-migrations/
+    // 2026-10-30-one-active-account-per-owner.sql) is the backstop that
+    // catches the loser here instead of letting a second active login exist.
+    if (err?.code === "P2002") throw new ConflictError("that owner already has an account");
+    throw err;
+  }
 
   // Outside the transaction and deliberately not fatal. An approved account
   // whose transaction failed to open is recoverable; an approval that

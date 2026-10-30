@@ -5,11 +5,18 @@ import {
   suspend, restore,
 } from "../controllers/authController.js";
 import { verifyJwt, verifyJwtAllowPending, requireRole } from "../middleware/auth.js";
+import { rateLimit } from "../middleware/rateLimit.js";
 
 const router = Router();
-router.post("/login", login);
+// Generous per-IP caps — these exist to blunt credential-stuffing/brute-force
+// and signup-spam, not to throttle normal use. Each route gets its own
+// limiter instance (its own hit counter) so a burst of signups can't count
+// against the login cap or vice versa. Kept high enough that the existing
+// test suite's rapid-fire requests (same loopback IP, same process) never
+// trip it: the busiest file issues ~12 signups / ~5 logins, well under 50.
+router.post("/login", rateLimit({ windowMs: 15 * 60 * 1000, max: 50 }), login);
 // Public self-registration for lessors/lessees.
-router.post("/signup", signup);
+router.post("/signup", rateLimit({ windowMs: 15 * 60 * 1000, max: 50 }), signup);
 router.post("/register", verifyJwt, requireRole("ADMIN"), register);
 // Account approval queue — the owner asked for ADMIN or O-Lease.
 router.get("/pending", verifyJwt, requireRole("ADMIN", "LEASING_OFFICER"), pendingAccounts);
