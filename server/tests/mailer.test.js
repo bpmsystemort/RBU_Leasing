@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { sendMail, inviteEmail, verifyMail } from "../src/lib/mailer.js";
+import { prisma } from "../src/lib/prisma.js";
 
 describe("mailer", () => {
   // This suite must never attempt a real SMTP connection. Save/restore
@@ -7,8 +8,12 @@ describe("mailer", () => {
   // regardless of what the surrounding environment happens to have set.
   const savedMailHost = process.env.MAIL_HOST;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     delete process.env.MAIL_HOST;
+    // This file doesn't call resetCrudTables(), so clear the singleton row
+    // directly — a leftover row from another test file would otherwise let
+    // the mailer read a DB config instead of exercising the no-config path.
+    await prisma.emailSettings.deleteMany();
   });
 
   afterEach(() => {

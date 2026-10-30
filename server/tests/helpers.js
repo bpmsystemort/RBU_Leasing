@@ -20,6 +20,9 @@ export async function resetCrudTables() {
   await prisma.unitOwner.deleteMany();
   await prisma.tower.deleteMany();
   await prisma.estate.deleteMany();
+  // No FK relations — standalone singleton row. Cleared so every test starts
+  // with no EmailSettings row (service falls back to env config).
+  await prisma.emailSettings.deleteMany();
 }
 
 export const tokens = {

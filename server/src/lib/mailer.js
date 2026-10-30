@@ -1,23 +1,34 @@
 import { createRequire } from "module";
+import { getEmailSettings } from "../services/emailSettingsService.js";
+
 const require = createRequire(import.meta.url);
 const nodemailer = require("nodemailer");
 
-function transport() {
-  if (process.env.MAIL_HOST) {
-    return nodemailer.createTransport({
-      host: process.env.MAIL_HOST,
-      port: Number(process.env.MAIL_PORT || 587),
-      secure: process.env.MAIL_SECURE === "true",
-      auth: process.env.MAIL_USER ? { user: process.env.MAIL_USER, pass: process.env.MAIL_PASS } : undefined,
-    });
-  }
-  return null; // no SMTP configured
+async function buildTransport() {
+  const cfg = await getEmailSettings();
+  if (!cfg.enabled || !cfg.host) return null;
+  const t = nodemailer.createTransport({
+    host: cfg.host,
+    port: cfg.port,
+    secure: cfg.secure,
+    // No MAIL_USER configured means the SMTP host accepts unauthenticated
+    // connections (e.g. an internal relay) — omit `auth` entirely rather
+    // than sending nodemailer an empty/undefined credential pair.
+    auth: cfg.user ? { user: cfg.user, pass: cfg.pass } : undefined,
+  });
+  return { t, cfg };
 }
 
 export async function sendMail({ to, subject, html, text }) {
-  const t = transport();
-  const from = process.env.MAIL_FROM || "RBU Leasing <no-reply@rbu.local>";
-  if (!t) { console.log(`[mailer] SMTP not configured — not sending to ${to}: ${subject}`); return { delivered: false }; }
+  const built = await buildTransport();
+  if (!built) {
+    console.log(`[mailer] email disabled or not configured — not sending to ${to}: ${subject}`);
+    return { delivered: false };
+  }
+  const { t, cfg } = built;
+  const from = cfg.fromName && cfg.fromAddress
+    ? `${cfg.fromName} <${cfg.fromAddress}>`
+    : (cfg.fromAddress || cfg.user || "RBU Leasing <no-reply@rbu.local>");
   try {
     await t.sendMail({ from, to, subject, html, text });
     return { delivered: true };
@@ -36,10 +47,14 @@ export async function sendMail({ to, subject, html, text }) {
 // Returns { ok } on success or { ok:false, error } otherwise. Used by
 // scripts/test-mail.js so an operator can confirm MAIL_* credentials.
 export async function verifyMail() {
-  const t = transport();
-  if (!t) return { ok: false, error: "MAIL_HOST not set — SMTP is not configured" };
-  try { await t.verify(); return { ok: true }; }
-  catch (err) { return { ok: false, error: err.message }; }
+  const built = await buildTransport();
+  if (!built) return { ok: false, error: "Email is disabled or SMTP host not configured" };
+  try {
+    await built.t.verify();
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
 }
 
 // ownerName is a free-text UnitOwner.name an officer can set to anything, so
