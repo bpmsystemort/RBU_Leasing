@@ -1,3 +1,4 @@
+import crypto from "crypto";
 import { describe, it, expect, beforeEach } from "vitest";
 import request from "supertest";
 import { createApp } from "../src/app.js";
@@ -190,5 +191,133 @@ describe("Pending queue surfaces a suggested owner match", () => {
     const res = await request(app).get("/api/auth/pending").set(adminAuth());
     const row = res.body.find((u) => u.email === "nomatch@x.com");
     expect(row.suggestedOwner).toBeNull();
+  });
+});
+
+describe("Owner invitations", () => {
+  const officerAuth = () => ({ Authorization: `Bearer ${tokens.officer()}` });
+  const ownerAuth = () => ({ Authorization: `Bearer ${tokens.owner()}` });
+
+  // The route hands back the full URL (host included, when PUBLIC_BASE_URL is
+  // set) — pull the raw token back out of it the way a copy-pasting officer's
+  // browser would.
+  function tokenFromAcceptUrl(acceptUrl) {
+    return new URL(acceptUrl, "http://example.test").searchParams.get("token");
+  }
+
+  it("an officer creates an invite: 201 with a copyable acceptUrl; the DB row stores a hashed token and a future expiry", async () => {
+    const owner = await factory.owner({ name: "Juan Dela Cruz" });
+
+    const res = await request(app)
+      .post("/api/owner-invites")
+      .set(officerAuth())
+      .send({ unitOwnerId: owner.id, email: "juan@example.com" });
+
+    expect(res.status).toBe(201);
+    expect(typeof res.body.acceptUrl).toBe("string");
+    expect(res.body.acceptUrl).toContain("/accept-invite?token=");
+    expect(res.body.ownerName).toBe("Juan Dela Cruz");
+    expect(res.body.email).toBe("juan@example.com");
+
+    const token = tokenFromAcceptUrl(res.body.acceptUrl);
+    expect(token).toBeTruthy();
+
+    const row = await prisma.ownerInvite.findFirst({ where: { unitOwnerId: owner.id } });
+    expect(row).toBeTruthy();
+    // Only a hash is ever persisted — never the raw, emailed token.
+    expect(row.tokenHash).not.toBe(token);
+    expect(row.tokenHash).toBe(crypto.createHash("sha256").update(token).digest("hex"));
+    expect(row.expiresAt.getTime()).toBeGreaterThan(Date.now());
+  });
+
+  it("GET /owner-invites/:token returns the owner name + email for a live token; a bad token is 404", async () => {
+    const owner = await factory.owner({ name: "Maria Reyes" });
+    const create = await request(app)
+      .post("/api/owner-invites")
+      .set(officerAuth())
+      .send({ unitOwnerId: owner.id, email: "maria@example.com" });
+    const token = tokenFromAcceptUrl(create.body.acceptUrl);
+
+    const ok = await request(app).get(`/api/owner-invites/${token}`);
+    expect(ok.status).toBe(200);
+    expect(ok.body).toEqual({ ownerName: "Maria Reyes", email: "maria@example.com" });
+
+    const bad = await request(app).get("/api/owner-invites/not-a-real-token");
+    expect(bad.status).toBe(404);
+  });
+
+  it("accepting with a password creates an APPROVED UNIT_OWNER linked to the owner and consumes the invite; a second accept is 410", async () => {
+    const owner = await factory.owner({ name: "Pedro Santos" });
+    const create = await request(app)
+      .post("/api/owner-invites")
+      .set(officerAuth())
+      .send({ unitOwnerId: owner.id, email: "pedro@example.com" });
+    const token = tokenFromAcceptUrl(create.body.acceptUrl);
+
+    const accept = await request(app)
+      .post(`/api/owner-invites/${token}/accept`)
+      .send({ password: "longenough1" });
+    expect(accept.status).toBe(200);
+    expect(accept.body.token).toBeTruthy();
+    expect(accept.body.user).toMatchObject({
+      role: "UNIT_OWNER", status: "APPROVED", unitOwnerId: owner.id, email: "pedro@example.com",
+    });
+
+    const user = await prisma.user.findUnique({ where: { id: accept.body.user.id } });
+    expect(user).toMatchObject({ status: "APPROVED", role: "UNIT_OWNER", unitOwnerId: owner.id });
+
+    const after = await prisma.unitOwner.findUnique({ where: { id: owner.id } });
+    expect(after.email).toBe("pedro@example.com");
+
+    const invite = await prisma.ownerInvite.findFirst({ where: { unitOwnerId: owner.id } });
+    expect(invite.consumedAt).toBeTruthy();
+
+    const again = await request(app)
+      .post(`/api/owner-invites/${token}/accept`)
+      .send({ password: "longenough1" });
+    expect(again.status).toBe(410);
+  });
+
+  it("an expired invite is 410", async () => {
+    const owner = await factory.owner({ name: "Ana Lim" });
+    const create = await request(app)
+      .post("/api/owner-invites")
+      .set(officerAuth())
+      .send({ unitOwnerId: owner.id, email: "ana@example.com" });
+    const token = tokenFromAcceptUrl(create.body.acceptUrl);
+
+    await prisma.ownerInvite.updateMany({
+      where: { unitOwnerId: owner.id },
+      data: { expiresAt: new Date(Date.now() - 1000) },
+    });
+
+    const res = await request(app).get(`/api/owner-invites/${token}`);
+    expect(res.status).toBe(410);
+  });
+
+  it("inviting an owner that already has an active account is 409", async () => {
+    const owner = await factory.owner({ name: "Taken Owner 2" });
+    await prisma.user.create({
+      data: {
+        name: "Already Has Login", email: "already.has.login@x.com", contactEmail: "already.has.login@x.com",
+        role: "UNIT_OWNER", status: "APPROVED", passwordHash: "x", passwordPlain: "x",
+        unitOwnerId: owner.id,
+      },
+    });
+
+    const res = await request(app)
+      .post("/api/owner-invites")
+      .set(officerAuth())
+      .send({ unitOwnerId: owner.id, email: "new.invite@x.com" });
+    expect(res.status).toBe(409);
+  });
+
+  it("a non-staff token creating an invite is refused (403)", async () => {
+    const owner = await factory.owner({ name: "Blocked Owner" });
+    const res = await request(app)
+      .post("/api/owner-invites")
+      .set(ownerAuth())
+      .send({ unitOwnerId: owner.id, email: "blocked@x.com" });
+    expect(res.status).toBe(403);
   });
 });

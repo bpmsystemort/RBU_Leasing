@@ -4,6 +4,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import authRoutes from "./routes/authRoutes.js";
 import ownerRoutes from "./routes/ownerRoutes.js";
+import ownerInviteRoutes from "./routes/ownerInviteRoutes.js";
 import tenantRoutes from "./routes/tenantRoutes.js";
 import unitRoutes from "./routes/unitRoutes.js";
 import leaseRoutes from "./routes/leaseRoutes.js";
@@ -51,6 +52,7 @@ export function createApp() {
   app.use(auditMiddleware); // records every successful mutating action
   app.use("/api/auth", authRoutes);
   app.use("/api/owners", ownerRoutes);
+  app.use("/api/owner-invites", ownerInviteRoutes);
   app.use("/api/tenants", tenantRoutes);
   app.use("/api/units", unitRoutes);
   app.use("/api/leases", leaseRoutes);
