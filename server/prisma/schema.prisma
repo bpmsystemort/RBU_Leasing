@@ -15,6 +15,7 @@ enum AccountStatus {
   FOR_REVISION
   APPROVED
   REJECTED
+  SUSPENDED
 }
 
 enum Role {
@@ -122,10 +123,30 @@ model UnitOwner {
   lessorInfoSheets LessorInfoSheet[]
   leasingTransactions LeasingTransaction[]
   lessorRequirements LessorRequirement[]
+  invites    OwnerInvite[]
   createdAt  DateTime              @default(now())
   updatedAt  DateTime              @updatedAt
 
   @@unique([nameKey])
+}
+
+// A pending email invitation for a lessor to activate a portal account for a
+// UnitOwner. `tokenHash` stores a hash of the one-time token sent by email
+// (the raw token is never persisted); `consumedAt` is set once the invite is
+// used to create/activate the account.
+model OwnerInvite {
+  id            String    @id @default(cuid())
+  unitOwner     UnitOwner @relation(fields: [unitOwnerId], references: [id], onDelete: Cascade)
+  unitOwnerId   String
+  email         String
+  tokenHash     String    @unique
+  expiresAt     DateTime
+  consumedAt    DateTime?
+  createdById   String?
+  createdByName String?
+  createdAt     DateTime  @default(now())
+
+  @@index([unitOwnerId])
 }
 
 model LessorInfoSheet {
