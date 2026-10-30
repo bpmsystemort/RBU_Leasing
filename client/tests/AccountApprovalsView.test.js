@@ -215,6 +215,35 @@ describe("AccountApprovalsView", () => {
     expect(pendingAccounts.approve).toHaveBeenCalledWith("o1", "owner-1");
   });
 
+  // ownerSearch and ownerPick are independent state. If a search excludes the
+  // already-picked owner, the <select> must still show it selected — never
+  // blank — so Approve never submits an owner the officer can no longer see.
+  it("keeps the picked owner visible and selected when the search excludes it", async () => {
+    const suggested = { id: "owner-1", name: "Juan Cruz" };
+    pendingAccounts.list.mockResolvedValue([
+      { id: "o1", name: "Juan Cruz", email: "juan.owner", contactEmail: "juan@x.com", role: "UNIT_OWNER",
+        createdAt: new Date().toISOString(), pendingUnit: null, suggestedOwner: suggested },
+    ]);
+    owners.list.mockResolvedValue([suggested, { id: "owner-2", name: "Ana Reyes" }]);
+
+    const w = await mountView();
+    const row = w.findAll("tbody tr")[0];
+    const select = row.find(".owner-select");
+    expect(select.element.value).toBe("owner-1");
+
+    // Search text that matches no owner's name, including the picked one.
+    await row.find(".owner-search").setValue("zzz-no-match");
+    await flushPromises();
+
+    const optionValues = select.findAll("option").map((o) => o.element.value);
+    expect(optionValues).toContain("owner-1");
+    expect(select.element.value).toBe("owner-1");
+
+    await btnIn(row, "Approve").trigger("click");
+    await flushPromises();
+    expect(pendingAccounts.approve).toHaveBeenCalledWith("o1", "owner-1");
+  });
+
   // Leaving the picker unset must keep today's behavior (a new owner is
   // created) — and say so, rather than leaving the officer to guess.
   it("approves with no owner id when the picker is left unset, and warns a new owner will be created", async () => {

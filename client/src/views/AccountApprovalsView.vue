@@ -28,8 +28,17 @@ const ownerSearch = reactive({});
 
 function filteredOwners(rowId) {
   const q = (ownerSearch[rowId] || "").trim().toLowerCase();
-  if (!q) return allOwners.value;
-  return allOwners.value.filter((o) => o.name.toLowerCase().includes(q));
+  const matches = q ? allOwners.value.filter((o) => o.name.toLowerCase().includes(q)) : allOwners.value;
+  // The <select> below is v-model-bound to ownerPick independently of this
+  // search text. If the search excludes the row's current pick, the option
+  // backing it would vanish and the <select> would render blank while
+  // ownerPick still held that id — so Approve could silently submit an owner
+  // the officer can no longer see. Union it back in (deduped) so a pick is
+  // always visible, and thus always what's actually about to be submitted.
+  const pickedId = ownerPick[rowId];
+  if (!pickedId || matches.some((o) => o.id === pickedId)) return matches;
+  const picked = allOwners.value.find((o) => o.id === pickedId);
+  return picked ? [...matches, picked] : matches;
 }
 
 // Rejecting needs a reason, so it opens a small prompt rather than firing
