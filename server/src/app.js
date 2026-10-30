@@ -26,6 +26,7 @@ import appointmentRoutes from "./routes/appointmentRoutes.js";
 import unitListingRoutes from "./routes/unitListingRoutes.js";
 import publicUnitRoutes from "./routes/publicUnitRoutes.js";
 import { publicEstateRouter, publicTowerRouter } from "./routes/publicReferenceRoutes.js";
+import settingsRoutes from "./routes/settingsRoutes.js";
 import { auditMiddleware } from "./middleware/audit.js";
 import { errorHandler } from "./middleware/error.js";
 import { prisma } from "./lib/prisma.js";
@@ -76,6 +77,7 @@ export function createApp() {
   app.use("/api/public/units", publicUnitRoutes);
   app.use("/api/public/estates", publicEstateRouter);
   app.use("/api/public/towers", publicTowerRouter);
+  app.use("/api/settings", settingsRoutes);
 
   // Production: serve the built Vue client as a single deployable. The API
   // routes above take precedence; any other GET falls back to index.html so
