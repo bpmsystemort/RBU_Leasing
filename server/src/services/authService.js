@@ -10,6 +10,13 @@ import { key } from "../lib/importClean.js";
 // The seeded super admin cannot be deleted or demoted from ADMIN.
 export const SUPER_ADMIN_EMAIL = "Admin";
 
+// One owner, one active account. SUSPENDED counts as "has an account" too —
+// the fix for a suspended duplicate is to restore the existing login, not to
+// create or link a second one to the same owner. Shared by approveAccount
+// and ownerInviteService (createInvite/acceptInvite) so the two paths can't
+// drift out of sync again.
+export const ACTIVE_ACCOUNT_STATUSES = ["APPROVED", "PENDING", "FOR_REVISION", "SUSPENDED"];
+
 export async function hashPassword(plain) {
   return bcrypt.hash(plain, 10);
 }
@@ -303,13 +310,10 @@ export async function approveAccount(id, approver, { existingUnitOwnerId } = {})
       if (existingUnitOwnerId) {
         const owner = await tx.unitOwner.findUnique({ where: { id: existingUnitOwnerId } });
         if (!owner) throw new InvalidReferenceError("existingUnitOwnerId does not reference an existing owner");
-        // One owner, one active account. SUSPENDED counts as "has an
-        // account" too — the fix for a suspended duplicate is to restore the
-        // existing login, not to link a second one to the same owner.
         const taken = await tx.user.findFirst({
           where: {
             unitOwnerId: owner.id,
-            status: { in: ["APPROVED", "PENDING", "FOR_REVISION", "SUSPENDED"] },
+            status: { in: ACTIVE_ACCOUNT_STATUSES },
             id: { not: id },
           },
         });

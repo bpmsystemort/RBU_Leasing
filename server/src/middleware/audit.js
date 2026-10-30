@@ -16,6 +16,7 @@ const ENTITY = {
   towers: "Tower",
   "leasing-transactions": "Transaction",
   "lessor-requirements": "Lessor Requirement",
+  "owner-invites": "Owner Invite",
 };
 
 // Derive a human action + entity from the request path/method.
@@ -61,6 +62,15 @@ function classify(path, method) {
     else if (method === "POST") action = "upload";
     else action = method.toLowerCase();
     return { entity: "Lessor Requirement", action, entityId: seg1 === "mine" ? null : seg1 };
+  }
+
+  if (group === "owner-invites") {
+    // Routes: POST / (create); POST /:token/accept. segs[1] is the raw,
+    // single-use invite token — it must never be persisted into AuditLog, so
+    // entityId is always null here rather than falling through to the
+    // generic segs[1] handling below.
+    const action = segs[2] === "accept" ? "accept" : (method === "POST" ? "create" : method.toLowerCase());
+    return { entity: "Owner Invite", action, entityId: null };
   }
 
   const sub = segs[2]; // approve | reject | assign | submit | review

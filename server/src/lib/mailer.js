@@ -18,8 +18,18 @@ export async function sendMail({ to, subject, html, text }) {
   const t = transport();
   const from = process.env.MAIL_FROM || "RBU Leasing <no-reply@rbu.local>";
   if (!t) { console.log(`[mailer] SMTP not configured — not sending to ${to}: ${subject}`); return { delivered: false }; }
-  await t.sendMail({ from, to, subject, html, text });
-  return { delivered: true };
+  try {
+    await t.sendMail({ from, to, subject, html, text });
+    return { delivered: true };
+  } catch (err) {
+    // A configured-but-failing SMTP server must degrade to "not delivered"
+    // rather than throw: the caller (e.g. createInvite) has already
+    // committed the invite row, and the officer still gets the copyable
+    // acceptUrl back either way. Never log err beyond .message — it may
+    // carry transport details (host/auth) we don't want in logs.
+    console.error(`[mailer] send failed to ${to}: ${err.message}`);
+    return { delivered: false };
+  }
 }
 
 export function inviteEmail(acceptUrl, ownerName) {

@@ -5,6 +5,7 @@ import { createApp } from "../src/app.js";
 import { resetCrudTables, tokens, factory } from "./helpers.js";
 import { prisma } from "../src/lib/prisma.js";
 import { hashPassword } from "../src/services/authService.js";
+import { flushAudits } from "../src/middleware/audit.js";
 
 const app = createApp();
 beforeEach(async () => { await resetCrudTables(); });
@@ -278,6 +279,32 @@ describe("Owner invitations", () => {
     expect(again.status).toBe(410);
   });
 
+  it("records the accept in the audit log without persisting the raw token as entityId", async () => {
+    const owner = await factory.owner({ name: "Lucia Fernandez" });
+    const create = await request(app)
+      .post("/api/owner-invites")
+      .set(officerAuth())
+      .send({ unitOwnerId: owner.id, email: "lucia@example.com" });
+    const token = tokenFromAcceptUrl(create.body.acceptUrl);
+
+    const accept = await request(app)
+      .post(`/api/owner-invites/${token}/accept`)
+      .send({ password: "longenough1" });
+    expect(accept.status).toBe(200);
+
+    await flushAudits();
+    const entry = await prisma.auditLog.findFirst({
+      where: { entity: "Owner Invite", action: "accept" },
+      orderBy: { createdAt: "desc" },
+    });
+    expect(entry).toBeTruthy();
+    expect(entry.action).toBe("accept");
+    // The raw, single-use secret must never land in persisted storage outside
+    // the OwnerInvite row itself (which only ever keeps a hash of it).
+    expect(entry.entityId).not.toBe(token);
+    expect(entry.entityId).toBeNull();
+  });
+
   it("an expired invite is 410", async () => {
     const owner = await factory.owner({ name: "Ana Lim" });
     const create = await request(app)
@@ -309,6 +336,23 @@ describe("Owner invitations", () => {
       .post("/api/owner-invites")
       .set(officerAuth())
       .send({ unitOwnerId: owner.id, email: "new.invite@x.com" });
+    expect(res.status).toBe(409);
+  });
+
+  it("inviting an owner whose only account is SUSPENDED is still 409 — suspension must not be bypassable by re-inviting", async () => {
+    const owner = await factory.owner({ name: "Suspended Owner" });
+    await prisma.user.create({
+      data: {
+        name: "Suspended Login", email: "suspended.login@x.com", contactEmail: "suspended.login@x.com",
+        role: "UNIT_OWNER", status: "SUSPENDED", passwordHash: "x", passwordPlain: "x",
+        unitOwnerId: owner.id,
+      },
+    });
+
+    const res = await request(app)
+      .post("/api/owner-invites")
+      .set(officerAuth())
+      .send({ unitOwnerId: owner.id, email: "new.invite.suspended@x.com" });
     expect(res.status).toBe(409);
   });
 

@@ -1,16 +1,15 @@
 import crypto from "crypto";
 import { prisma } from "../lib/prisma.js";
-import { hashPassword, issueToken } from "./authService.js";
+import { hashPassword, issueToken, ACTIVE_ACCOUNT_STATUSES } from "./authService.js";
 import { sendMail, inviteEmail } from "../lib/mailer.js";
 import { NotFoundError, ConflictError, InvalidReferenceError, GoneError } from "../lib/errors.js";
 
 const sha = (t) => crypto.createHash("sha256").update(t).digest("hex");
-const ACTIVE = ["APPROVED", "PENDING", "FOR_REVISION"];
 
 export async function createInvite({ unitOwnerId, email }, inviter) {
   const owner = await prisma.unitOwner.findUnique({ where: { id: unitOwnerId } });
   if (!owner) throw new InvalidReferenceError("owner not found");
-  const taken = await prisma.user.findFirst({ where: { unitOwnerId, status: { in: ACTIVE } } });
+  const taken = await prisma.user.findFirst({ where: { unitOwnerId, status: { in: ACTIVE_ACCOUNT_STATUSES } } });
   if (taken) throw new ConflictError("that owner already has an account");
   // Supersede any outstanding invite for this owner.
   await prisma.ownerInvite.deleteMany({ where: { unitOwnerId, consumedAt: null } });
@@ -38,7 +37,7 @@ export async function getInvite(token) {
 
 export async function acceptInvite(token, password) {
   const invite = await liveInvite(token);
-  const taken = await prisma.user.findFirst({ where: { unitOwnerId: invite.unitOwnerId, status: { in: ACTIVE } } });
+  const taken = await prisma.user.findFirst({ where: { unitOwnerId: invite.unitOwnerId, status: { in: ACTIVE_ACCOUNT_STATUSES } } });
   if (taken) throw new ConflictError("that owner already has an account");
   const result = await prisma.$transaction(async (tx) => {
     // The invite's email may collide with an existing User.email (unique) —
