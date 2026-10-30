@@ -8,6 +8,7 @@ import UnitDetailPublicView from "../views/UnitDetailPublicView.vue";
 import LoginView from "../views/LoginView.vue";
 import SignupView from "../views/SignupView.vue";
 import RegisterUnitPublicView from "../views/RegisterUnitPublicView.vue";
+import AcceptInviteView from "../views/AcceptInviteView.vue";
 import ExecutiveDashboardView from "../views/ExecutiveDashboardView.vue";
 import DashboardMetricView from "../views/DashboardMetricView.vue";
 import BrowseUnitsView from "../views/BrowseUnitsView.vue";
@@ -68,6 +69,7 @@ const routes = [
     beforeEnter: (to) => (to.query.as === "LESSOR" ? "/register-unit" : true),
   }, // public self-registration (lessee); lessor entry redirects to the unit-first wizard
   { path: "/register-unit", component: RegisterUnitPublicView, meta: { ownsThemeToggle: true } }, // public lessor wizard: unit first, then account
+  { path: "/accept-invite", component: AcceptInviteView, meta: { ownsThemeToggle: true } }, // public: owner sets a password from an invite link
   {
     path: "/app",
     component: AppLayout,

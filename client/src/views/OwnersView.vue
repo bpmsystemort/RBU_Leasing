@@ -1,7 +1,7 @@
 <script setup>
 import { ref, computed, onMounted } from "vue";
 import { useRouter } from "vue-router";
-import { owners, assignOwner, listUsers } from "../lib/resource.js";
+import { owners, assignOwner, listUsers, ownerInvites } from "../lib/resource.js";
 import { useAuthStore } from "../stores/auth.js";
 
 const auth = useAuthStore();
@@ -42,6 +42,45 @@ function remove(row) {
   if (!confirm(`Delete owner "${row.name}"?`)) return;
   owners.remove(row.id).then(load).catch((e) => alert(e.response?.data?.error || "Delete failed"));
 }
+
+// Invite-to-portal dialog — officers and admins send an owner the accept-invite
+// link. Whether the owner already has an account isn't known client-side, so
+// the action always shows; a 409 from the server surfaces as the dialog error.
+const inviteOwner = ref(null); // the row being invited, or null when the dialog is closed
+const inviteEmail = ref("");
+const inviteError = ref("");
+const inviteResult = ref(null); // { acceptUrl, delivered, email, ownerName } once sent
+const inviteSubmitting = ref(false);
+const inviteCopied = ref(false);
+
+function openInvite(row) {
+  inviteOwner.value = row;
+  inviteEmail.value = row.email || "";
+  inviteError.value = "";
+  inviteResult.value = null;
+  inviteCopied.value = false;
+}
+function closeInvite() {
+  if (inviteSubmitting.value) return;
+  inviteOwner.value = null;
+}
+async function sendInvite() {
+  inviteError.value = "";
+  inviteSubmitting.value = true;
+  try {
+    inviteResult.value = await ownerInvites.create(inviteOwner.value.id, inviteEmail.value);
+  } catch (e) {
+    inviteError.value = e.response?.data?.error || "Could not send the invitation.";
+  } finally {
+    inviteSubmitting.value = false;
+  }
+}
+async function copyInviteUrl() {
+  try {
+    await navigator.clipboard.writeText(inviteResult.value.acceptUrl);
+    inviteCopied.value = true;
+  } catch { /* clipboard unavailable — the field below is still selectable */ }
+}
 </script>
 
 <template>
@@ -64,7 +103,7 @@ function remove(row) {
     <table>
       <thead>
         <tr>
-          <th>Name</th><th>Email</th><th>Phone</th><th>Leasing Officer</th><th>Review</th><th v-if="isAdmin">Actions</th>
+          <th>Name</th><th>Email</th><th>Phone</th><th>Leasing Officer</th><th>Review</th><th v-if="auth.canWrite">Actions</th>
         </tr>
       </thead>
       <tbody>
@@ -83,16 +122,54 @@ function remove(row) {
             <span v-if="r.needsReview" class="review-tag">Needs review</span>
             <span v-else class="muted">—</span>
           </td>
-          <td v-if="isAdmin">
-            <button type="button" class="edit" @click="router.push(`/app/owners/${r.id}`)">Edit</button>
-            <button type="button" class="delete" @click="remove(r)">Delete</button>
+          <td v-if="auth.canWrite">
+            <template v-if="isAdmin">
+              <button type="button" class="edit" @click="router.push(`/app/owners/${r.id}`)">Edit</button>
+              <button type="button" class="delete" @click="remove(r)">Delete</button>
+            </template>
+            <button type="button" class="invite" @click="openInvite(r)">Invite to portal</button>
           </td>
         </tr>
         <tr v-if="rows.length === 0">
-          <td :colspan="isAdmin ? 6 : 5" class="muted">No owners.</td>
+          <td :colspan="auth.canWrite ? 6 : 5" class="muted">No owners.</td>
         </tr>
       </tbody>
     </table>
+
+    <div v-if="inviteOwner" class="modal-backdrop" @click.self="closeInvite">
+      <div class="modal" role="dialog" aria-modal="true" aria-label="Invite to portal">
+        <h2>Invite {{ inviteOwner.name }} to the portal</h2>
+
+        <form v-if="!inviteResult" @submit.prevent="sendInvite">
+          <div class="field">
+            <label for="invite-email">Email</label>
+            <input id="invite-email" type="email" v-model="inviteEmail" />
+          </div>
+          <p v-if="inviteError" class="error">{{ inviteError }}</p>
+          <div class="modal-actions">
+            <button type="button" class="ghost" @click="closeInvite" :disabled="inviteSubmitting">Cancel</button>
+            <button type="submit" :disabled="inviteSubmitting">{{ inviteSubmitting ? "Sending…" : "Send invite" }}</button>
+          </div>
+        </form>
+
+        <div v-else class="invite-done">
+          <p class="invite-done__msg">
+            <template v-if="inviteResult.delivered">Invitation emailed to {{ inviteResult.email }}.</template>
+            <template v-else>Invitation created. Email delivery isn't configured — share the link below directly.</template>
+          </p>
+          <div class="field">
+            <label for="invite-url">Accept link</label>
+            <div class="copy-row">
+              <input id="invite-url" type="text" readonly :value="inviteResult.acceptUrl" @click="$event.target.select()" />
+              <button type="button" class="ghost" @click="copyInviteUrl">{{ inviteCopied ? "Copied" : "Copy" }}</button>
+            </div>
+          </div>
+          <div class="modal-actions">
+            <button type="button" class="primary" @click="closeInvite">Done</button>
+          </div>
+        </div>
+      </div>
+    </div>
   </section>
 </template>
 
@@ -118,4 +195,8 @@ function remove(row) {
   background: var(--paper); border: 1px solid var(--warn); color: var(--warn);
   white-space: nowrap;
 }
+.invite-done__msg { color: var(--text); font-size: 0.9rem; line-height: 1.5; margin: 0 0 1rem; }
+.copy-row { display: flex; gap: 0.5rem; }
+.copy-row input { font-family: ui-monospace, "Cascadia Code", "Consolas", monospace; font-size: 0.82rem; }
+.copy-row button { flex-shrink: 0; margin: 0; }
 </style>

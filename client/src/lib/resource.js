@@ -203,3 +203,12 @@ export const application = {
   get: () => api.get("/auth/application").then((r) => r.data),
   resubmit: (unit) => api.patch("/auth/application", { unit }).then((r) => r.data),
 };
+
+// Owner-portal invitations: staff invite an owner by email (create), the
+// public accept page reads the invite (get) and the owner sets a password
+// (accept) to receive an APPROVED UNIT_OWNER session.
+export const ownerInvites = {
+  create: (unitOwnerId, email) => api.post("/owner-invites", { unitOwnerId, email }).then((r) => r.data),
+  get: (token) => api.get(`/owner-invites/${token}`).then((r) => r.data),
+  accept: (token, password) => api.post(`/owner-invites/${token}/accept`, { password }).then((r) => r.data),
+};
