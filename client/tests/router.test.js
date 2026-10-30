@@ -5,6 +5,7 @@ import InquiryView from "../src/views/InquiryView.vue";
 import AvailableUnitsView from "../src/views/AvailableUnitsView.vue";
 import LandingView from "../src/views/LandingView.vue";
 import { useAuthStore } from "../src/stores/auth.js";
+import { STAFF_NAV, OWNER_NAV, TENANT_NAV, navItems } from "../src/lib/nav.js";
 
 describe("router", () => {
   beforeEach(() => setActivePinia(createPinia()));
@@ -85,5 +86,29 @@ describe("router", () => {
     useAuthStore().setSession({ token: "t", user: { role: "UNIT_OWNER", status: "APPROVED" } });
     await router.push("/app/my-units");
     expect(router.currentRoute.value.path).toBe("/app/my-units");
+  });
+
+  it("every sidebar destination resolves to a real, role-gated app route", () => {
+    for (const nav of [STAFF_NAV, OWNER_NAV, TENANT_NAV]) {
+      for (const item of navItems(nav)) {
+        const r = router.resolve(item.to);
+        expect(r.matched.length, `${item.to} should match a route`).toBeGreaterThan(0);
+        expect(r.meta.roles, `${item.to} should be role-gated`).toBeTruthy();
+      }
+    }
+  });
+
+  it("admin/write sidebar items point at correctly-gated routes", () => {
+    for (const item of navItems(STAFF_NAV)) {
+      const roles = router.resolve(item.to).meta.roles;
+      if (item.admin) {
+        expect(roles, item.to).toContain("ADMIN");
+        expect(roles, item.to).not.toContain("LEASING_OFFICER");
+        expect(roles, item.to).not.toContain("VIEWER");
+      } else if (item.write) {
+        expect(roles, item.to).toContain("ADMIN");
+        expect(roles, item.to).toContain("LEASING_OFFICER");
+      }
+    }
   });
 });
