@@ -34,6 +34,7 @@ import MyLessorRequirementsView from "../views/MyLessorRequirementsView.vue";
 import LessorProfileView from "../views/LessorProfileView.vue";
 import ApplicationStatusView from "../views/ApplicationStatusView.vue";
 import PortfolioImportView from "../views/PortfolioImportView.vue";
+import EmailSettingsView from "../views/EmailSettingsView.vue";
 // Lazy-loaded: pull in the PDF.js live preview, keeping it out of the main bundle.
 const OwnerInfoSheetView = () => import("../views/OwnerInfoSheetView.vue");
 const TenantInfoSheetView = () => import("../views/TenantInfoSheetView.vue");
@@ -124,6 +125,7 @@ const routes = [
       { path: "users", component: UsersView, meta: { roles: ["ADMIN"] } },
       { path: "audit", component: AuditView, meta: { roles: ["ADMIN"] } },
       { path: "import", component: PortfolioImportView, meta: { roles: ["ADMIN"] } },
+      { path: "email-settings", component: EmailSettingsView, meta: { roles: ["ADMIN"] } },
       { path: "content", component: ContentManagerView, meta: { roles: WRITE } },
       { path: "content/listings", component: ListingsManagerView, meta: { roles: WRITE } },
       { path: "forms", component: CmsFormsView, meta: { roles: ["ADMIN"] } },

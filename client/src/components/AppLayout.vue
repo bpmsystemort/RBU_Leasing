@@ -65,6 +65,7 @@ const STAFF_GROUPS = [
     { to: "/app/users", label: "System Users", icon: "shield", admin: true },
     { to: "/app/audit", label: "Audit Trail", icon: "list", admin: true },
     { to: "/app/import", label: "Import Portfolio", icon: "download", admin: true },
+    { to: "/app/email-settings", label: "Email Settings", icon: "message", admin: true },
   ] },
 ];
 const OWNER_GROUPS = [{ label: null, items: [

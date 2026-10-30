@@ -216,3 +216,9 @@ export const ownerInvites = {
   get: (token) => api.get(`/owner-invites/${token}`).then((r) => r.data),
   accept: (token, password) => api.post(`/owner-invites/${token}/accept`, { password }).then((r) => r.data),
 };
+
+export const emailSettings = {
+  get: () => api.get("/settings/email").then((r) => r.data),
+  save: (data) => api.put("/settings/email", data).then((r) => r.data),
+  test: (to) => api.post("/settings/email/test", { to }).then((r) => r.data),
+};
