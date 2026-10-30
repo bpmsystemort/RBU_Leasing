@@ -134,4 +134,25 @@ describe("EmailSettingsView", () => {
     await flushPromises();
     expect(w.find(".error").text()).toBe("Forbidden");
   });
+
+  it("never exposes an SMTP credential input — credentials live only in server env", async () => {
+    const w = mountView();
+    await flushPromises();
+
+    // No password field, ever.
+    expect(w.find('input[type="password"]').exists()).toBe(false);
+
+    // No field whose id/name/placeholder, or associated <label>, implies a
+    // username or password — the UI must never collect SMTP credentials.
+    const inputs = w.findAll("input");
+    expect(inputs.length).toBeGreaterThan(0);
+    for (const input of inputs) {
+      const el = input.element;
+      const label = w.find(`label[for="${el.id}"]`);
+      const haystack = [el.id, el.getAttribute("name"), el.getAttribute("placeholder"), label.exists() ? label.text() : ""]
+        .join(" ")
+        .toLowerCase();
+      expect(haystack).not.toMatch(/user|pass/);
+    }
+  });
 });

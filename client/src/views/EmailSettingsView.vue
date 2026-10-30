@@ -158,6 +158,7 @@ async function sendTest() {
 </template>
 
 <style scoped>
+.error { color: var(--danger); background: var(--danger-050); border-radius: var(--radius-sm); padding: .6rem .75rem; font-size: .88rem; }
 .muted { color: var(--muted); }
 .hint { color: var(--muted); font-size: 0.85rem; margin: 0.4rem 0 0; }
 .panel, form { margin-bottom: 1.1rem; }
