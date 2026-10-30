@@ -32,6 +32,16 @@ export async function sendMail({ to, subject, html, text }) {
   }
 }
 
+// Verify the configured SMTP connection + auth WITHOUT sending a message.
+// Returns { ok } on success or { ok:false, error } otherwise. Used by
+// scripts/test-mail.js so an operator can confirm MAIL_* credentials.
+export async function verifyMail() {
+  const t = transport();
+  if (!t) return { ok: false, error: "MAIL_HOST not set — SMTP is not configured" };
+  try { await t.verify(); return { ok: true }; }
+  catch (err) { return { ok: false, error: err.message }; }
+}
+
 // ownerName is a free-text UnitOwner.name an officer can set to anything, so
 // it must never be interpolated into the HTML body unescaped.
 function escapeHtml(str) {

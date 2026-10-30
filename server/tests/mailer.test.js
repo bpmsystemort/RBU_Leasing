@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { sendMail, inviteEmail } from "../src/lib/mailer.js";
+import { sendMail, inviteEmail, verifyMail } from "../src/lib/mailer.js";
 
 describe("mailer", () => {
   // This suite must never attempt a real SMTP connection. Save/restore
@@ -20,6 +20,12 @@ describe("mailer", () => {
     await expect(
       sendMail({ to: "a@b.com", subject: "x", text: "y" }),
     ).resolves.toEqual({ delivered: false });
+  });
+
+  it("verifyMail returns { ok:false } without connecting when MAIL_HOST is unset", async () => {
+    const r = await verifyMail();
+    expect(r.ok).toBe(false);
+    expect(r.error).toMatch(/not set|not configured/i);
   });
 
   it("inviteEmail returns a subject and a body containing the accept URL", () => {
