@@ -558,3 +558,20 @@ model LesseeRequirement {
 
   @@unique([tenantId, requirementKey])
 }
+
+// Singleton row (id is always "singleton", enforced by the service, not the
+// DB) holding the admin-configurable outbound-email settings. Non-secret
+// only — MAIL_USER/MAIL_PASS stay in server/.env and are never stored here.
+// See manual-migrations/2026-10-30-email-settings.sql.
+model EmailSettings {
+  id            String   @id @default("singleton")
+  enabled       Boolean  @default(false)
+  host          String?
+  port          Int      @default(587)
+  secure        Boolean  @default(false)
+  fromAddress   String?
+  fromName      String?
+  updatedById   String?
+  updatedByName String?
+  updatedAt     DateTime @updatedAt
+}
