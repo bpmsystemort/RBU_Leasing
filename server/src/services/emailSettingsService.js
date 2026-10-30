@@ -61,6 +61,16 @@ export async function getEmailStatus() {
   };
 }
 
+// The JWT carries only userId/role/etc (see middleware/auth.js) — never a
+// name — so the actor's display name has to be resolved here. Reading it off
+// the token (or trusting a caller-supplied name) would record every change
+// as anonymous, same reasoning as approverName in authService.js.
+async function resolveActorName(actor) {
+  if (!actor?.userId) return null;
+  const user = await prisma.user.findUnique({ where: { id: actor.userId }, select: { name: true } });
+  return user?.name ?? null;
+}
+
 export async function updateEmailSettings(data, actor) {
   const d = {
     enabled: !!data.enabled,
@@ -70,7 +80,7 @@ export async function updateEmailSettings(data, actor) {
     fromAddress: data.fromAddress ?? null,
     fromName: data.fromName ?? null,
     updatedById: actor?.userId ?? null,
-    updatedByName: actor?.name ?? null,
+    updatedByName: await resolveActorName(actor),
   };
   await prisma.emailSettings.upsert({ where: { id: ID }, create: { id: ID, ...d }, update: d });
   return getEmailStatus();

@@ -60,9 +60,17 @@ describe("emailSettingsService", () => {
     process.env.MAIL_USER = "bot@example.com";
     process.env.MAIL_PASS = "s3cr3t";
 
+    // The actor mirrors req.user (middleware/auth.js): only userId/role come
+    // off the JWT, never a name. updateEmailSettings must resolve the display
+    // name from the DB itself rather than trust a passed-in name — a
+    // synthetic { userId, name } actor would mask that bug.
+    const actor = await prisma.user.create({
+      data: { name: "N", email: "n@example.com", passwordHash: "x", passwordPlain: "x", role: "VIEWER" },
+    });
+
     const result = await updateEmailSettings(
       { enabled: true, host: "smtp.x", port: 25, secure: false, fromAddress: "a@b.com", fromName: "RBU" },
-      { userId: "u", name: "N" },
+      { userId: actor.id },
     );
     // updateEmailSettings returns getEmailStatus() — never exposes credentials.
     expect(result).not.toHaveProperty("pass");
@@ -93,7 +101,7 @@ describe("emailSettingsService", () => {
       secure: false,
       fromAddress: "a@b.com",
       fromName: "RBU",
-      updatedById: "u",
+      updatedById: actor.id,
       updatedByName: "N",
     });
   });
@@ -101,7 +109,7 @@ describe("emailSettingsService", () => {
   it("mailer.sendMail with a DB row enabled:false resolves { delivered:false } and does not throw", async () => {
     await updateEmailSettings(
       { enabled: false, host: "smtp.x", port: 25, secure: false, fromAddress: "a@b.com", fromName: "RBU" },
-      { userId: "u", name: "N" },
+      { userId: "u" },
     );
     await expect(
       sendMail({ to: "a@b.com", subject: "x", text: "y" }),
@@ -113,7 +121,7 @@ describe("emailSettingsService", () => {
   it("DB row enabled:true with a host, but no env MAIL_USER: getEmailSettings().user is null (no fabricated credentials)", async () => {
     await updateEmailSettings(
       { enabled: true, host: "x", port: 25, secure: false, fromAddress: "a@b.com", fromName: "RBU" },
-      { userId: "u", name: "N" },
+      { userId: "u" },
     );
     const cfg = await getEmailSettings();
     expect(cfg.user).toBeNull();

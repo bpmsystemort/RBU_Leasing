@@ -19,6 +19,8 @@ vi.mock("../src/lib/mailer.js", () => ({
 import { createApp } from "../src/app.js";
 import { resetCrudTables, tokens } from "./helpers.js";
 import { verifyMail, sendMail } from "../src/lib/mailer.js";
+import { prisma } from "../src/lib/prisma.js";
+import { issueToken, SUPER_ADMIN_EMAIL } from "../src/services/authService.js";
 
 const app = createApp();
 
@@ -102,6 +104,46 @@ describe("admin email settings API", () => {
         .set("Authorization", `Bearer ${tokens.viewer()}`)
         .send(validBody);
       expect(res.status).toBe(403);
+    });
+
+    // tokens.admin() signs a synthetic "test-admin" userId that has no User
+    // row (see tests/accountApproval.test.js), so it can't prove a DB-resolved
+    // name. Use the real seeded super admin instead so updatedByName has an
+    // actual row to resolve against.
+    it("records the acting admin's id and resolves their display name from the DB (the JWT itself carries no name)", async () => {
+      const admin = await prisma.user.findUnique({ where: { email: SUPER_ADMIN_EMAIL } });
+      const res = await request(app)
+        .put("/api/settings/email")
+        .set("Authorization", `Bearer ${issueToken({ id: admin.id, role: "ADMIN" })}`)
+        .send(validBody);
+      expect(res.status).toBe(200);
+
+      const row = await prisma.emailSettings.findUnique({ where: { id: "singleton" } });
+      expect(row.updatedById).toBe(admin.id);
+      expect(row.updatedByName).toBe(admin.name);
+    });
+
+    it("ADMIN clearing From address/name sends them blank; the row stores null instead of 400ing", async () => {
+      const res = await request(app)
+        .put("/api/settings/email")
+        .set("Authorization", `Bearer ${tokens.admin()}`)
+        .send({ enabled: true, host: "smtp.example.com", port: 587, secure: false, fromAddress: "", fromName: "" });
+
+      expect(res.status).toBe(200);
+      const row = await prisma.emailSettings.findUnique({ where: { id: "singleton" } });
+      expect(row.fromAddress).toBeNull();
+      expect(row.fromName).toBeNull();
+    });
+
+    it("a blank/omitted port does not error and the service's default (587) applies", async () => {
+      const { port, ...withoutPort } = validBody;
+      const res = await request(app)
+        .put("/api/settings/email")
+        .set("Authorization", `Bearer ${tokens.admin()}`)
+        .send(withoutPort);
+
+      expect(res.status).toBe(200);
+      expect(res.body.port).toBe(587);
     });
   });
 

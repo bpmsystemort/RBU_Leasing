@@ -57,11 +57,14 @@ async function save() {
   try {
     const payload = {
       enabled: form.enabled,
-      host: form.host,
-      port: Number(form.port),
+      host: form.host || null,
+      // A cleared port field is "" (v-model.number leaves non-numeric input
+      // as-is) — omit it so the server's default (587) applies instead of
+      // sending 0, which the server now rejects.
+      port: form.port === "" || form.port == null ? undefined : Number(form.port),
       secure: form.secure,
-      fromAddress: form.fromAddress,
-      fromName: form.fromName,
+      fromAddress: form.fromAddress || null,
+      fromName: form.fromName || null,
     };
     applyStatus(await emailSettings.save(payload));
     saved.value = true;
