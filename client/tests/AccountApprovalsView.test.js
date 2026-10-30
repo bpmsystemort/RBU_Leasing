@@ -15,7 +15,7 @@ vi.mock("../src/lib/resource.js", () => ({
     revise: vi.fn(() => Promise.resolve({})),
   },
   owners: {
-    list: vi.fn(() => Promise.resolve([])),
+    linkable: vi.fn(() => Promise.resolve([])),
   },
 }));
 
@@ -43,8 +43,8 @@ describe("AccountApprovalsView", () => {
     pendingAccounts.reject.mockClear();
     pendingAccounts.revise.mockClear();
     pendingAccounts.list.mockResolvedValue(ROWS);
-    owners.list.mockClear();
-    owners.list.mockResolvedValue([]);
+    owners.linkable.mockClear();
+    owners.linkable.mockResolvedValue([]);
   });
 
   it("lists the applications with the details needed to vet them", async () => {
@@ -202,12 +202,42 @@ describe("AccountApprovalsView", () => {
       { id: "o1", name: "Juan Cruz", email: "juan.owner", contactEmail: "juan@x.com", role: "UNIT_OWNER",
         createdAt: new Date().toISOString(), pendingUnit: null, suggestedOwner: suggested },
     ]);
-    owners.list.mockResolvedValue([suggested, { id: "owner-2", name: "Ana Reyes" }]);
+    owners.linkable.mockResolvedValue([suggested, { id: "owner-2", name: "Ana Reyes" }]);
+
+    const w = await mountView();
+    // The picker's options must come from the unscoped linkable() endpoint —
+    // list() is scoped to the signed-in officer's own assigned owners, which
+    // would hide an unassigned imported owner from this very picker.
+    expect(owners.linkable).toHaveBeenCalled();
+    const row = w.findAll("tbody tr")[0];
+    const select = row.find(".owner-select");
+    expect(select.exists()).toBe(true);
+    expect(select.element.value).toBe("owner-1");
+
+    await btnIn(row, "Approve").trigger("click");
+    await flushPromises();
+    expect(pendingAccounts.approve).toHaveBeenCalledWith("o1", "owner-1");
+  });
+
+  // owners.linkable() is unscoped, so in the ordinary case it already
+  // includes the suggested match. But the row's suggestedOwner must be
+  // choosable regardless of what the fetched list happens to contain —
+  // otherwise a <select> bound to it would render with no matching <option>
+  // and silently show blank instead of the server's own suggested match.
+  it("always offers the row's suggested owner as a pick option, even if the fetched list omits it", async () => {
+    const suggested = { id: "owner-1", name: "Juan Cruz" };
+    pendingAccounts.list.mockResolvedValue([
+      { id: "o1", name: "Juan Cruz", email: "juan.owner", contactEmail: "juan@x.com", role: "UNIT_OWNER",
+        createdAt: new Date().toISOString(), pendingUnit: null, suggestedOwner: suggested },
+    ]);
+    // linkable() returns owners that do NOT include the suggested match.
+    owners.linkable.mockResolvedValue([{ id: "owner-2", name: "Ana Reyes" }]);
 
     const w = await mountView();
     const row = w.findAll("tbody tr")[0];
     const select = row.find(".owner-select");
-    expect(select.exists()).toBe(true);
+    const optionValues = select.findAll("option").map((o) => o.element.value);
+    expect(optionValues).toContain("owner-1");
     expect(select.element.value).toBe("owner-1");
 
     await btnIn(row, "Approve").trigger("click");
@@ -224,7 +254,7 @@ describe("AccountApprovalsView", () => {
       { id: "o1", name: "Juan Cruz", email: "juan.owner", contactEmail: "juan@x.com", role: "UNIT_OWNER",
         createdAt: new Date().toISOString(), pendingUnit: null, suggestedOwner: suggested },
     ]);
-    owners.list.mockResolvedValue([suggested, { id: "owner-2", name: "Ana Reyes" }]);
+    owners.linkable.mockResolvedValue([suggested, { id: "owner-2", name: "Ana Reyes" }]);
 
     const w = await mountView();
     const row = w.findAll("tbody tr")[0];
@@ -251,7 +281,7 @@ describe("AccountApprovalsView", () => {
       { id: "o2", name: "New Applicant", email: "new.applicant", contactEmail: "new@x.com", role: "UNIT_OWNER",
         createdAt: new Date().toISOString(), pendingUnit: null, suggestedOwner: null },
     ]);
-    owners.list.mockResolvedValue([{ id: "owner-2", name: "Ana Reyes" }]);
+    owners.linkable.mockResolvedValue([{ id: "owner-2", name: "Ana Reyes" }]);
 
     const w = await mountView();
     const row = w.findAll("tbody tr")[0];

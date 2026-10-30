@@ -32,9 +32,24 @@ export async function sendMail({ to, subject, html, text }) {
   }
 }
 
+// ownerName is a free-text UnitOwner.name an officer can set to anything, so
+// it must never be interpolated into the HTML body unescaped.
+function escapeHtml(str) {
+  return String(str ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 export function inviteEmail(acceptUrl, ownerName) {
   const subject = "Your RBU Leasing portal invitation";
+  // Plain text has no markup to break out of — left as-is.
   const text = `Hello ${ownerName || ""},\n\nYou've been invited to access the RBU Leasing owner portal. Set your password here (link expires in 7 days, single use):\n${acceptUrl}\n\nIf you didn't expect this, ignore this email.`;
-  const html = `<p>Hello ${ownerName || ""},</p><p>You've been invited to access the RBU Leasing owner portal. Set your password using the link below (expires in 7 days, single use):</p><p><a href="${acceptUrl}">${acceptUrl}</a></p><p>If you didn't expect this, you can ignore this email.</p>`;
+  const safeName = escapeHtml(ownerName || "");
+  // The href attribute carries the server-built acceptUrl verbatim; the
+  // visible link text is escaped defensively too.
+  const html = `<p>Hello ${safeName},</p><p>You've been invited to access the RBU Leasing owner portal. Set your password using the link below (expires in 7 days, single use):</p><p><a href="${acceptUrl}">${escapeHtml(acceptUrl)}</a></p><p>If you didn't expect this, you can ignore this email.</p>`;
   return { subject, html, text };
 }

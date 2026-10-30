@@ -12,6 +12,10 @@ export function resource(path) {
 
 export const owners = resource("/owners");
 owners.profile = (id) => api.get(`/owners/${id}/profile`).then((r) => r.data);
+// Unscoped owner list for the account-approval link-picker — owners.list()
+// is scoped to the signed-in LEASING_OFFICER's own assigned owners, which
+// would hide an unassigned imported owner from that picker.
+owners.linkable = () => api.get("/owners/linkable").then((r) => r.data);
 export function ownerMe() { return api.get("/owners/me").then((r) => r.data); }
 export function tenantMe() { return api.get("/tenants/me").then((r) => r.data); }
 export const units = resource("/units");

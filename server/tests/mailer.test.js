@@ -32,4 +32,15 @@ describe("mailer", () => {
     expect(html).toContain("Jane");
     expect(text).toContain("Jane");
   });
+
+  // ownerName comes from UnitOwner.name, which an officer can type freely —
+  // it must not be interpolated into the HTML body unescaped.
+  it("HTML-escapes ownerName in the html body, but leaves the plain-text version untouched", () => {
+    const url = "https://x/accept?token=T";
+    const { html, text } = inviteEmail(url, "<b>Jane</b>");
+    expect(html).not.toContain("<b>Jane</b>");
+    expect(html).toContain("&lt;b&gt;Jane&lt;/b&gt;");
+    expect(html).toContain(url);
+    expect(text).toContain("<b>Jane</b>");
+  });
 });

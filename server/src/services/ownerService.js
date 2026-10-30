@@ -10,6 +10,19 @@ export function listOwners(user) {
   return prisma.unitOwner.findMany({ where, orderBy: { createdAt: "desc" }, include: officerInclude });
 }
 
+// Every owner, deliberately unscoped — for the account-approval link-picker
+// (AccountApprovalsView), where an officer must be able to link an applicant
+// to ANY imported owner, not just the ones already assigned to them. Scoping
+// this the way listOwners does would hide an unassigned imported owner from
+// the very picker meant to let staff link to it, pushing them toward minting
+// a duplicate owner instead. Minimal shape — the picker needs nothing else.
+export function listOwnersForLinking() {
+  return prisma.unitOwner.findMany({
+    orderBy: { createdAt: "desc" },
+    select: { id: true, name: true, email: true },
+  });
+}
+
 // Assign an owner to an O-Lease (LEASING_OFFICER), or null to unassign.
 export async function assignOwner(id, assignedOfficerId) {
   await getOwner(id);

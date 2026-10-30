@@ -123,6 +123,11 @@ export async function suspendUser(id) {
   const user = await prisma.user.findUnique({ where: { id } });
   if (!user) throw new NotFoundError("user not found");
   if (user.email === SUPER_ADMIN_EMAIL) throw new ConflictError("the super admin cannot be suspended");
+  // An ADMIN account must never be reversibly locked out this way — only
+  // deleteUser (which already refuses the super admin) touches an ADMIN's
+  // access, and only APPROVED is a meaningful "active" state to suspend FROM.
+  if (user.role === "ADMIN") throw new ConflictError("an ADMIN account cannot be suspended");
+  if (user.status !== "APPROVED") throw new ConflictError("only an approved account can be suspended");
   const updated = await prisma.user.update({ where: { id }, data: { status: "SUSPENDED" } });
   return asStatusResult(updated);
 }
@@ -130,6 +135,10 @@ export async function suspendUser(id) {
 export async function restoreUser(id) {
   const user = await prisma.user.findUnique({ where: { id } });
   if (!user) throw new NotFoundError("user not found");
+  // Restore is specifically the suspend/restore reversal — it must not
+  // double as a side door that promotes a PENDING/REJECTED/FOR_REVISION
+  // account to APPROVED without going through the approval decision.
+  if (user.status !== "SUSPENDED") throw new ConflictError("only a suspended account can be restored");
   const updated = await prisma.user.update({ where: { id }, data: { status: "APPROVED" } });
   return asStatusResult(updated);
 }

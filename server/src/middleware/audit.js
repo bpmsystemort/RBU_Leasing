@@ -88,6 +88,15 @@ function classify(path, method) {
 async function record(req, res, body, path) {
   const { entity, action, entityId } = classify(path, req.method);
 
+  // The raw, single-use invite token is a PATH segment (not a query string),
+  // so classify()'s entityId:null above only kept it out of the entityId
+  // column — it was still landing verbatim in `path`. Store a template there
+  // instead of ever persisting the secret itself.
+  let storedPath = path;
+  if (path.startsWith("/api/owner-invites/")) {
+    storedPath = path.endsWith("/accept") ? "/api/owner-invites/:token/accept" : "/api/owner-invites/:token";
+  }
+
   // Actor: the authenticated user, or — for login — the account that just signed in.
   let actorId = req.user?.userId || null;
   let actorRole = req.user?.role || null;
@@ -107,7 +116,7 @@ async function record(req, res, body, path) {
       actorId, actorName, actorRole, action, entity,
       entityId: entityId || body?.id || null,
       method: req.method,
-      path,
+      path: storedPath,
     },
   });
 }

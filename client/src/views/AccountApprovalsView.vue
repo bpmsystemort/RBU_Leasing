@@ -26,7 +26,8 @@ const ownerPick = reactive({});
 // the chosen id so a half-typed search never clobbers a prior selection.
 const ownerSearch = reactive({});
 
-function filteredOwners(rowId) {
+function filteredOwners(row) {
+  const rowId = row.id;
   const q = (ownerSearch[rowId] || "").trim().toLowerCase();
   const matches = q ? allOwners.value.filter((o) => o.name.toLowerCase().includes(q)) : allOwners.value;
   // The <select> below is v-model-bound to ownerPick independently of this
@@ -35,10 +36,20 @@ function filteredOwners(rowId) {
   // ownerPick still held that id — so Approve could silently submit an owner
   // the officer can no longer see. Union it back in (deduped) so a pick is
   // always visible, and thus always what's actually about to be submitted.
+  //
+  // Separately, the row's own suggestedOwner — the server's hinted match —
+  // must always be choosable too, even if for any reason it isn't in the
+  // fetched allOwners list (e.g. it hasn't loaded yet). Union it in as well.
+  const extras = [];
+  const add = (o) => {
+    if (o && !matches.some((m) => m.id === o.id) && !extras.some((e) => e.id === o.id)) extras.push(o);
+  };
   const pickedId = ownerPick[rowId];
-  if (!pickedId || matches.some((o) => o.id === pickedId)) return matches;
-  const picked = allOwners.value.find((o) => o.id === pickedId);
-  return picked ? [...matches, picked] : matches;
+  if (pickedId) {
+    add(allOwners.value.find((o) => o.id === pickedId) || (row.suggestedOwner?.id === pickedId ? row.suggestedOwner : null));
+  }
+  add(row.suggestedOwner);
+  return extras.length ? [...matches, ...extras] : matches;
 }
 
 // Rejecting needs a reason, so it opens a small prompt rather than firing
@@ -75,7 +86,10 @@ async function load() {
   }
 }
 async function loadOwners() {
-  try { allOwners.value = await owners.list(); } catch { /* the picker just stays empty */ }
+  // Unscoped on purpose: owners.list() is scoped to the signed-in officer's
+  // own assigned owners, which would hide an unassigned imported owner from
+  // this picker and push the officer toward minting a duplicate.
+  try { allOwners.value = await owners.linkable(); } catch { /* the picker just stays empty */ }
 }
 onMounted(() => { load(); loadOwners(); });
 
@@ -183,7 +197,7 @@ async function confirmRevise() {
               />
               <select class="owner-select" v-model="ownerPick[r.id]">
                 <option value="">Create a new owner</option>
-                <option v-for="o in filteredOwners(r.id)" :key="o.id" :value="o.id">{{ o.name }}</option>
+                <option v-for="o in filteredOwners(r)" :key="o.id" :value="o.id">{{ o.name }}</option>
               </select>
               <p v-if="!ownerPick[r.id]" class="muted small">A new owner will be created.</p>
             </template>

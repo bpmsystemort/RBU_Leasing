@@ -174,6 +174,51 @@ describe("Suspending and restoring an account", () => {
     const approveRes = await request(app).patch(`/api/auth/pending/${applicant.id}/approve`).set(viewer);
     expect(approveRes.status).toBe(403);
   });
+
+  // restoreUser must not become a backdoor APPROVED-promotion for an account
+  // that was never suspended — a PENDING applicant has not been vetted, and a
+  // REJECTED one was actively turned down.
+  it("refuses to restore an account that isn't SUSPENDED (409), and it stays PENDING", async () => {
+    const applicant = await pendingOwnerUser({ email: "restore.pending@x.com" });
+
+    const res = await request(app)
+      .patch(`/api/auth/users/${applicant.id}/restore`)
+      .set(adminAuth());
+    expect(res.status).toBe(409);
+
+    const after = await prisma.user.findUnique({ where: { id: applicant.id } });
+    expect(after.status).toBe("PENDING");
+  });
+
+  // The super-admin guard (by email) already blocked suspending the seeded
+  // super admin; this guards every ADMIN account by role, including a second
+  // one that isn't the super admin.
+  //
+  // resetCrudTables() deliberately never deletes ADMIN-role rows (so the one
+  // seeded admin always survives), so a row created here would otherwise leak
+  // across every future test run — clean it up in a finally regardless of
+  // outcome, and use a random (not counter-based) email so a run that somehow
+  // still leaves one behind can never collide with this one.
+  it("refuses to suspend an ADMIN target (409), and it stays APPROVED", async () => {
+    const otherAdmin = await prisma.user.create({
+      data: {
+        name: "Second Admin", email: `second.admin.${crypto.randomUUID()}@x.com`, role: "ADMIN",
+        status: "APPROVED", passwordHash: "x", passwordPlain: "x",
+      },
+    });
+
+    try {
+      const res = await request(app)
+        .patch(`/api/auth/users/${otherAdmin.id}/suspend`)
+        .set(adminAuth());
+      expect(res.status).toBe(409);
+
+      const after = await prisma.user.findUnique({ where: { id: otherAdmin.id } });
+      expect(after.status).toBe("APPROVED");
+    } finally {
+      await prisma.user.delete({ where: { id: otherAdmin.id } }).catch(() => {});
+    }
+  });
 });
 
 describe("Pending queue surfaces a suggested owner match", () => {
@@ -305,6 +350,32 @@ describe("Owner invitations", () => {
     expect(entry.entityId).toBeNull();
   });
 
+  it("does not persist the raw invite token in the audit log's path either", async () => {
+    const owner = await factory.owner({ name: "Path Redaction Owner" });
+    const create = await request(app)
+      .post("/api/owner-invites")
+      .set(officerAuth())
+      .send({ unitOwnerId: owner.id, email: "path.redact@example.com" });
+    const token = tokenFromAcceptUrl(create.body.acceptUrl);
+
+    const accept = await request(app)
+      .post(`/api/owner-invites/${token}/accept`)
+      .send({ password: "longenough1" });
+    expect(accept.status).toBe(200);
+
+    await flushAudits();
+    const entry = await prisma.auditLog.findFirst({
+      where: { entity: "Owner Invite", action: "accept" },
+      orderBy: { createdAt: "desc" },
+    });
+    expect(entry).toBeTruthy();
+    // The path is a request-logging field, not an identifier column — but the
+    // raw single-use token was a PATH segment, so it leaked there too unless
+    // the middleware specifically redacts it to a template.
+    expect(entry.path).not.toContain(token);
+    expect(entry.path).toBe("/api/owner-invites/:token/accept");
+  });
+
   it("an expired invite is 410", async () => {
     const owner = await factory.owner({ name: "Ana Lim" });
     const create = await request(app)
@@ -362,6 +433,33 @@ describe("Owner invitations", () => {
       .post("/api/owner-invites")
       .set(ownerAuth())
       .send({ unitOwnerId: owner.id, email: "blocked@x.com" });
+    expect(res.status).toBe(403);
+  });
+});
+
+describe("GET /api/owners/linkable — unscoped owner picker for the approval link-picker", () => {
+  const officerAuth = () => ({ Authorization: `Bearer ${tokens.officer()}` });
+
+  // listOwners (the plain GET /api/owners) scopes a LEASING_OFFICER to their
+  // own assignedOfficerId, which hides an unassigned imported owner from the
+  // approval screen's link-picker and pushes the officer toward minting a
+  // duplicate. /linkable must stay unscoped so every owner can be chosen.
+  it("an officer sees an owner that isn't assigned to them via /linkable, unlike the scoped list", async () => {
+    const owner = await factory.owner({ name: "Unassigned Import" }); // assignedOfficerId left null
+
+    const linkable = await request(app).get("/api/owners/linkable").set(officerAuth());
+    expect(linkable.status).toBe(200);
+    expect(linkable.body.some((o) => o.id === owner.id)).toBe(true);
+
+    const scoped = await request(app).get("/api/owners").set(officerAuth());
+    expect(scoped.status).toBe(200);
+    expect(scoped.body.some((o) => o.id === owner.id)).toBe(false);
+  });
+
+  it("refuses a non-staff-write token (UNIT_OWNER) with 403", async () => {
+    const res = await request(app)
+      .get("/api/owners/linkable")
+      .set({ Authorization: `Bearer ${tokens.owner()}` });
     expect(res.status).toBe(403);
   });
 });
