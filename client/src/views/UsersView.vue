@@ -1,6 +1,6 @@
 <script setup>
 import { reactive, ref, computed, onMounted } from "vue";
-import { createUser, listUsers, updateUser, deleteUser } from "../lib/resource.js";
+import { createUser, listUsers, updateUser, deleteUser, accounts as accountActions } from "../lib/resource.js";
 import { formatDate, ROLE_OPTIONS, roleLabel } from "../lib/formatters.js";
 
 const SUPER_ADMIN_EMAIL = "admin@rbu.local";
@@ -82,6 +82,25 @@ async function remove(u) {
     listError.value = e.response?.data?.error || "Delete failed";
   }
 }
+
+// Suspend/restore are reversible — unlike Delete, they don't need a confirm
+// prompt — and the list is reloaded so the badge and button swap right away.
+async function suspend(u) {
+  try {
+    await accountActions.suspend(u.id);
+    await load();
+  } catch (e) {
+    listError.value = e.response?.data?.error || "Could not suspend this account.";
+  }
+}
+async function restore(u) {
+  try {
+    await accountActions.restore(u.id);
+    await load();
+  } catch (e) {
+    listError.value = e.response?.data?.error || "Could not restore this account.";
+  }
+}
 </script>
 
 <template>
@@ -107,6 +126,7 @@ async function remove(u) {
           <td>
             {{ u.email }}
             <span v-if="u.email === SUPER_ADMIN_EMAIL" class="super-tag">Super admin</span>
+            <span v-else-if="u.status === 'SUSPENDED'" class="suspended-tag">Suspended</span>
           </td>
           <td><span class="role-tag">{{ roleLabel(u.role) }}</span></td>
           <td class="pw">
@@ -134,6 +154,19 @@ async function remove(u) {
           <td>{{ formatDate(u.createdAt) }}</td>
           <td class="row-actions">
             <button type="button" class="link" @click="openEdit(u)">Edit</button>
+            <button
+              v-if="u.status === 'SUSPENDED'"
+              type="button"
+              class="link"
+              @click="restore(u)"
+            >Restore</button>
+            <button
+              v-else
+              type="button"
+              class="link warn"
+              :disabled="u.email === SUPER_ADMIN_EMAIL"
+              @click="suspend(u)"
+            >Suspend</button>
             <button
               type="button"
               class="link danger"
@@ -200,6 +233,11 @@ async function remove(u) {
   padding: 0.12rem 0.4rem; border-radius: var(--radius-sm);
   background: var(--warn-050); color: var(--warn);
 }
+.suspended-tag {
+  margin-left: 0.4rem; font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.08em;
+  padding: 0.12rem 0.4rem; border-radius: var(--radius-sm);
+  background: var(--danger-050); color: var(--danger);
+}
 .row-actions { display: flex; gap: 0.75rem; }
 .link {
   background: none; border: none; padding: 0; cursor: pointer;
@@ -207,6 +245,7 @@ async function remove(u) {
 }
 .link:hover { text-decoration: underline; }
 .link.danger { color: var(--danger); }
+.link.warn { color: var(--warn); }
 .link:disabled { color: var(--muted); cursor: not-allowed; text-decoration: none; }
 .modal-backdrop {
   position: fixed; inset: 0; background: rgba(0, 0, 0, 0.55);

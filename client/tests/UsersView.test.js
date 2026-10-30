@@ -9,10 +9,14 @@ vi.mock("../src/lib/resource.js", () => ({
   createUser: vi.fn(() => Promise.resolve({ email: "frontdesk", role: "LEASING_OFFICER" })),
   updateUser: vi.fn(() => Promise.resolve({})),
   deleteUser: vi.fn(() => Promise.resolve()),
+  accounts: {
+    suspend: vi.fn(() => Promise.resolve({})),
+    restore: vi.fn(() => Promise.resolve({})),
+  },
 }));
 
 import UsersView from "../src/views/UsersView.vue";
-import { createUser, listUsers, updateUser, deleteUser } from "../src/lib/resource.js";
+import { createUser, listUsers, updateUser, deleteUser, accounts } from "../src/lib/resource.js";
 
 const RouterLinkStub = { props: ["to"], template: "<a class='rl'><slot/></a>" };
 function mountView() {
@@ -23,7 +27,10 @@ function findBtn(w, label) {
 }
 
 describe("UsersView", () => {
-  beforeEach(() => { createUser.mockClear(); listUsers.mockClear(); updateUser.mockClear(); deleteUser.mockClear(); });
+  beforeEach(() => {
+    createUser.mockClear(); listUsers.mockClear(); updateUser.mockClear(); deleteUser.mockClear();
+    accounts.suspend.mockClear(); accounts.restore.mockClear();
+  });
 
   it("lists credentials with friendly role labels", async () => {
     const w = mountView();
@@ -100,5 +107,34 @@ describe("UsersView", () => {
     const delButtons = w.findAll("button").filter((b) => b.text() === "Delete");
     expect(delButtons[0].attributes("disabled")).toBeDefined();
     expect(delButtons[1].attributes("disabled")).toBeUndefined();
+  });
+
+  it("shows a Suspended badge and a Restore button on a suspended row, and restores it", async () => {
+    listUsers.mockResolvedValueOnce([
+      { id: "u3", name: "Dormant User", email: "dormant", role: "LEASING_OFFICER", status: "SUSPENDED", password: "pw123456", createdAt: "2026-08-03T00:00:00Z" },
+    ]);
+    const w = mountView();
+    await flushPromises();
+    const row = w.findAll("tbody tr")[0];
+    expect(row.text()).toContain("Suspended");
+    const restoreBtn = findBtn(row, "Restore");
+    expect(restoreBtn).toBeTruthy();
+    await restoreBtn.trigger("click");
+    await flushPromises();
+    expect(accounts.restore).toHaveBeenCalledWith("u3");
+    expect(listUsers).toHaveBeenCalledTimes(2); // reloaded after restore
+  });
+
+  it("shows a Suspend button on an approved row and suspends it", async () => {
+    const w = mountView();
+    await flushPromises();
+    const row = w.findAll("tbody tr")[1]; // Front Desk — approved, no special status
+    expect(row.text()).not.toContain("Suspended");
+    const suspendBtn = findBtn(row, "Suspend");
+    expect(suspendBtn).toBeTruthy();
+    await suspendBtn.trigger("click");
+    await flushPromises();
+    expect(accounts.suspend).toHaveBeenCalledWith("u2");
+    expect(listUsers).toHaveBeenCalledTimes(2); // reloaded after suspend
   });
 });

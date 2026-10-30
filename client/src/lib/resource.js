@@ -88,7 +88,11 @@ export function createUser(payload) {
 // decision. Approving is what creates the linked Owner/Tenant record.
 export const pendingAccounts = {
   list: () => api.get("/auth/pending").then((r) => r.data),
-  approve: (id) => api.patch(`/auth/pending/${id}/approve`).then((r) => r.data),
+  // existingUnitOwnerId links this applicant to an owner already in the
+  // system (e.g. imported) instead of minting a new one; omit it to keep
+  // the original create-a-new-owner behavior.
+  approve: (id, existingUnitOwnerId) =>
+    api.patch(`/auth/pending/${id}/approve`, existingUnitOwnerId ? { existingUnitOwnerId } : {}).then((r) => r.data),
   reject: (id, reason) => api.patch(`/auth/pending/${id}/reject`, { reason }).then((r) => r.data),
   revise: (id, remarks) => api.patch(`/auth/pending/${id}/revise`, { remarks }).then((r) => r.data),
 };
@@ -102,6 +106,12 @@ export function updateUser(id, payload) {
 export function deleteUser(id) {
   return api.delete(`/auth/users/${id}`).then((r) => r.data);
 }
+// Suspend/restore a login — reversible and lower-stakes than edit/delete, so
+// ADMIN or LEASING_OFFICER may act on them (mirrors the server's own gate).
+export const accounts = {
+  suspend: (id) => api.patch(`/auth/users/${id}/suspend`).then((r) => r.data),
+  restore: (id) => api.patch(`/auth/users/${id}/restore`).then((r) => r.data),
+};
 
 export const appointments = {
   forTransaction: (txnId) => api.get(`/appointments/transaction/${txnId}`).then((r) => r.data),

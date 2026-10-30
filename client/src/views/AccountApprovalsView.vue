@@ -1,17 +1,36 @@
 <script setup>
 import { ref, reactive, onMounted } from "vue";
-import { pendingAccounts } from "../lib/resource.js";
+import { pendingAccounts, owners } from "../lib/resource.js";
 import { useActionCenter } from "../stores/actionCenter.js";
+import { useAuthStore } from "../stores/auth.js";
 import { formatDate, roleLabel } from "../lib/formatters.js";
 
 // Keeps the top-bar bell and sidebar badge in step the moment a decision is
 // made, rather than leaving a stale count until the next poll.
 const actions = useActionCenter();
+const auth = useAuthStore();
 
 const rows = ref([]);
 const loading = ref(false);
 const listError = ref("");
 const busy = reactive({}); // id -> true while a decision is in flight
+
+// Owners already in the system (e.g. imported from the legacy portfolio),
+// offered as a link target so approving a self-registered lessor doesn't
+// have to mint a duplicate owner record.
+const allOwners = ref([]);
+// row.id -> the existing owner chosen for that row ("" = none, so approving
+// keeps the original behavior of creating a brand-new owner).
+const ownerPick = reactive({});
+// row.id -> that row's free-text filter over allOwners, kept separate from
+// the chosen id so a half-typed search never clobbers a prior selection.
+const ownerSearch = reactive({});
+
+function filteredOwners(rowId) {
+  const q = (ownerSearch[rowId] || "").trim().toLowerCase();
+  if (!q) return allOwners.value;
+  return allOwners.value.filter((o) => o.name.toLowerCase().includes(q));
+}
 
 // Rejecting needs a reason, so it opens a small prompt rather than firing
 // straight away — an approval is reversible by other means, a rejection is not.
@@ -32,19 +51,34 @@ async function load() {
   try {
     rows.value = await pendingAccounts.list();
     actions.accountApprovals = rows.value.length;
+    for (const r of rows.value) {
+      // Only set once per row: a later reload (after someone else's decision)
+      // must not clobber an officer's in-progress pick on a row still pending.
+      if (r.role === "UNIT_OWNER" && ownerPick[r.id] === undefined) {
+        ownerPick[r.id] = r.suggestedOwner?.id ?? "";
+        ownerSearch[r.id] = "";
+      }
+    }
   } catch (e) {
     listError.value = e.response?.data?.error || "Could not load pending accounts.";
   } finally {
     loading.value = false;
   }
 }
-onMounted(load);
+async function loadOwners() {
+  try { allOwners.value = await owners.list(); } catch { /* the picker just stays empty */ }
+}
+onMounted(() => { load(); loadOwners(); });
 
 async function approve(row) {
   if (busy[row.id]) return;
   busy[row.id] = true;
   try {
-    await pendingAccounts.approve(row.id);
+    // An unset picker ("") keeps the original behavior of approve() creating
+    // a brand-new owner — calling with just the id, exactly as before.
+    const ownerId = row.role === "UNIT_OWNER" ? ownerPick[row.id] : "";
+    if (ownerId) await pendingAccounts.approve(row.id, ownerId);
+    else await pendingAccounts.approve(row.id);
     await load();
   } catch (e) {
     listError.value = e.response?.data?.error || "Could not approve this account.";
@@ -116,7 +150,7 @@ async function confirmRevise() {
 
     <table v-else class="grid">
       <thead>
-        <tr><th>Name</th><th>Username</th><th>Email</th><th>Applying as</th><th>Unit</th><th>Requested</th><th></th></tr>
+        <tr><th>Name</th><th>Username</th><th>Email</th><th>Applying as</th><th>Unit</th><th>Link to owner</th><th>Requested</th><th></th></tr>
       </thead>
       <tbody>
         <tr v-for="r in rows" :key="r.id">
@@ -128,6 +162,22 @@ async function confirmRevise() {
             <span v-if="r.pendingUnit" class="pending-unit">
               {{ r.pendingUnit.unitNumber }}
             </span>
+            <span v-else class="muted">—</span>
+          </td>
+          <td class="owner-link">
+            <template v-if="auth.canWrite && r.role === 'UNIT_OWNER'">
+              <input
+                type="text"
+                class="owner-search"
+                v-model="ownerSearch[r.id]"
+                placeholder="Search owners…"
+              />
+              <select class="owner-select" v-model="ownerPick[r.id]">
+                <option value="">Create a new owner</option>
+                <option v-for="o in filteredOwners(r.id)" :key="o.id" :value="o.id">{{ o.name }}</option>
+              </select>
+              <p v-if="!ownerPick[r.id]" class="muted small">A new owner will be created.</p>
+            </template>
             <span v-else class="muted">—</span>
           </td>
           <td>{{ formatDate(r.createdAt) }}</td>
@@ -193,6 +243,12 @@ async function confirmRevise() {
   background: var(--accent-050); color: var(--accent-text);
 }
 .pending-unit { font-weight: 600; }
+.owner-link { display: flex; flex-direction: column; gap: 0.3rem; min-width: 11rem; }
+.owner-search, .owner-select {
+  font: inherit; font-size: 0.85rem; padding: 0.3rem 0.45rem;
+  border: 1px solid var(--line-strong); border-radius: var(--radius-sm);
+  background: var(--paper); color: var(--text);
+}
 .row-actions { white-space: nowrap; }
 .approve { color: var(--good); }
 </style>
