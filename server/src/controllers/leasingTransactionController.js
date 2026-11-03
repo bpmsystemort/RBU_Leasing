@@ -41,6 +41,12 @@ export async function link(req, res, next) {
     res.json(await service.linkRecords(req.user, req.params.id, data));
   } catch (e) { next(e); }
 }
+export async function blockUnit(req, res, next) {
+  try { res.json(await service.blockUnit(req.user, req.params.id)); } catch (e) { next(e); }
+}
+export async function unblockUnit(req, res, next) {
+  try { res.json(await service.unblockUnit(req.user, req.params.id)); } catch (e) { next(e); }
+}
 export async function remove(req, res, next) {
   try { await service.deleteTransaction(req.params.id); res.status(204).end(); } catch (e) { next(e); }
 }
