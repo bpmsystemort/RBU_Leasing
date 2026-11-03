@@ -1,8 +1,9 @@
 import { prisma } from "../lib/prisma.js";
 import { NotFoundError, ConflictError, InvalidReferenceError } from "../lib/errors.js";
 import { ensureForUnit, activeDealForUnit } from "./leasingTransactionService.js";
+import { UNIT_HIERARCHY_INCLUDE } from "../lib/unitInclude.js";
 
-const withHierarchy = { tower: { include: { estate: true } }, owner: { select: { id: true, name: true } } };
+const withHierarchy = UNIT_HIERARCHY_INCLUDE;
 // Staff additionally see whether the owner record still needs verification
 // (owner.needsReview). Owners themselves keep the plain { id, name } shape.
 const withHierarchyStaff = { tower: { include: { estate: true } }, owner: { select: { id: true, name: true, needsReview: true } } };

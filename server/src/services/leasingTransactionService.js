@@ -5,6 +5,7 @@ import {
   APPROVAL_ROUTING, APPROVAL_STEP_STATUSES,
 } from "../../../shared/leasingStages.js";
 import { TRANSACTION_DOCUMENT_KEYS, labelForDocType } from "../../../shared/transactionDocuments.js";
+import { UNIT_HIERARCHY_INCLUDE } from "../lib/unitInclude.js";
 
 const includeFull = {
   unit: { select: { id: true, unitNumber: true, building: true } },
@@ -136,12 +137,26 @@ export async function openTransactionForUnit(unitId) {
 const OPEN = { OR: [{ finalStatus: null }, { finalStatus: { notIn: ["Signed", "Declined"] } }] };
 const HAS_PROSPECT = { OR: [{ inquiryId: { not: null } }, { tenantId: { not: null } }] };
 
+// A deal that died before it reached Contract Signing (the prospect was not
+// qualified, declined, or lost interest at the viewing) never closes through
+// finalStatus, so it would otherwise hold the unit forever.
+const NOT_DEAD_EARLY = {
+  NOT: [
+    { stage: "INQUIRY", status: { in: ["Not Qualified", "Declined"] } },
+    { stage: "UNIT_VIEWING", status: "Not Interested" },
+  ],
+};
+
 // A deal with a prospect that has not ended. The lessor-onboarding transaction
 // that ensureForUnit opens has no prospect, so it never counts: only a deal
 // with an inquiry or a tenant can hold or block a unit.
 export function activeDealForUnit(unitId, exceptTransactionId) {
   return prisma.leasingTransaction.findFirst({
-    where: { unitId, ...(exceptTransactionId ? { id: { not: exceptTransactionId } } : {}), AND: [OPEN, HAS_PROSPECT] },
+    where: {
+      unitId,
+      ...(exceptTransactionId ? { id: { not: exceptTransactionId } } : {}),
+      AND: [OPEN, HAS_PROSPECT, NOT_DEAD_EARLY],
+    },
     orderBy: { createdAt: "desc" },
   });
 }
@@ -150,7 +165,7 @@ export function activeDealForUnit(unitId, exceptTransactionId) {
 async function assertNoRivalDeal(unit) {
   const rival = await activeDealForUnit(unit.id);
   if (rival) {
-    throw new ConflictError(`Unit ${unit.unitNumber} already has an active deal (${rival.reference}) for another prospect; release it first`);
+    throw new ConflictError(`Unit ${unit.unitNumber} already has an active deal (${rival.reference}) for another prospect; unlink the unit from that deal or close it first`);
   }
 }
 
@@ -173,6 +188,19 @@ export async function releaseUnitBlock(actor, unitId) {
   const unit = await prisma.unit.findUnique({ where: { id: unitId } });
   if (!unit) throw new NotFoundError("Unit not found");
   if (unit.status !== "BLOCKED") throw new ConflictError("Unit is not blocked");
+  // A live deal's reservation is released by that deal's officer (or an admin).
+  // A block with no pointer, or whose deal has ended or is gone, has no holder
+  // to protect, and an unassigned deal is in every officer's scope.
+  if (unit.blockedByTransactionId && actor?.role !== "ADMIN") {
+    const holder = await prisma.leasingTransaction.findUnique({
+      where: { id: unit.blockedByTransactionId },
+      select: { reference: true, finalStatus: true, assignedOfficerId: true },
+    });
+    const live = holder && !["Signed", "Declined"].includes(holder.finalStatus);
+    if (live && holder.assignedOfficerId && holder.assignedOfficerId !== actor?.userId) {
+      throw new ConflictError(`This unit is held by deal ${holder.reference}; release it from that deal`);
+    }
+  }
   const { count } = await prisma.unit.updateMany({
     where: { id: unitId, status: "BLOCKED" },
     data: { status: "VACANT", blockedByTransactionId: null },
@@ -188,7 +216,7 @@ export async function releaseUnitBlock(actor, unitId) {
   }
   const released = await prisma.unit.findUnique({
     where: { id: unitId },
-    include: { tower: { include: { estate: true } }, owner: { select: { id: true, name: true } } },
+    include: UNIT_HIERARCHY_INCLUDE,
   });
   if (!released) throw new NotFoundError("Unit not found");
   return released;
@@ -373,6 +401,8 @@ async function settleUnitOnOutcome(row, client) {
 // Set the status within the current stage (with optional remarks).
 export async function setStatus(actor, id, { status, remarks }) {
   const txn = await loadOrThrow(id);
+  // Signing marked the unit occupied (and SP4 will create the lease): un-signing would corrupt both.
+  if (txn.finalStatus === "Signed" && status !== "Signed") throw new ConflictError("A signed deal cannot be changed");
   if (!isValidStatus(txn.stage, status)) {
     throw new InvalidReferenceError(`"${status}" is not a valid status for this stage`);
   }
@@ -381,9 +411,12 @@ export async function setStatus(actor, id, { status, remarks }) {
   const patch = { status, stageData };
   if (isFinalStage(txn.stage)) patch.finalStatus = status;
 
+  // Re-saving Signed (e.g. the signed contract uploaded again) updates the
+  // remarks but must not settle the unit a second time.
+  const alreadySigned = txn.finalStatus === "Signed";
   const { note } = await prisma.$transaction(async (tx) => {
     const row = await tx.leasingTransaction.update({ where: { id }, data: patch });
-    return { note: await settleUnitOnOutcome(row, tx) };
+    return { note: alreadySigned ? null : await settleUnitOnOutcome(row, tx) };
   });
   await logEvent(id, actor, `${stageByKey(txn.stage).label} status set to "${status}"${remarks ? ` — ${remarks}` : ""}`, txn.stage);
   if (note) await logEvent(id, actor, note, txn.stage);
@@ -445,6 +478,10 @@ export async function returnStage(actor, id, { status, remarks } = {}) {
   if (txn.finalStatus === "Signed") throw new ConflictError("A signed deal cannot be returned to an earlier stage");
   const prev = prevStageKey(txn.stage);
   if (!prev) throw new ConflictError("The transaction is already at the first stage");
+  // Reviving a declined deal makes it active again: refuse when another deal has taken the unit meanwhile.
+  if (txn.finalStatus === "Declined" && txn.unitId && (await activeDealForUnit(txn.unitId, id))) {
+    throw new ConflictError("Another active deal now exists on this unit");
+  }
 
   const prevCfg = stageByKey(prev);
   const stageData = { ...(txn.stageData || {}) };
@@ -517,9 +554,11 @@ export async function linkRecords(actor, id, { unitId, tenantId, unitOwnerId }) 
     };
   }
   // Pointing the deal at a different unit (or none) frees the one it was holding.
-  let released = false;
-  if (data.unitId !== undefined && data.unitId !== txn.unitId) released = await releaseBlockFor(id);
-  await prisma.leasingTransaction.update({ where: { id }, data });
+  const released = await prisma.$transaction(async (tx) => {
+    const r = (data.unitId !== undefined && data.unitId !== txn.unitId) ? await releaseBlockFor(id, tx) : false;
+    await tx.leasingTransaction.update({ where: { id }, data });
+    return r;
+  });
   if (notes.length) await logEvent(id, actor, `Linked ${notes.join(", ")}`);
   if (released) await logEvent(id, actor, "Unit block released (linked unit changed)", txn.stage);
   return getTransaction(id);
@@ -527,7 +566,12 @@ export async function linkRecords(actor, id, { unitId, tenantId, unitOwnerId }) 
 
 export async function deleteTransaction(id) {
   await loadOrThrow(id);
-  await prisma.leasingTransaction.delete({ where: { id } });
+  // Free the unit this deal is holding in the same transaction: otherwise the
+  // FK nulls the pointer and leaves a BLOCKED unit with no holder.
+  await prisma.$transaction(async (tx) => {
+    await releaseBlockFor(id, tx);
+    await tx.leasingTransaction.delete({ where: { id } });
+  });
 }
 
 // --- access control (shared by document + step endpoints) ------------------

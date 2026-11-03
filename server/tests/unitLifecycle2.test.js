@@ -377,3 +377,74 @@ describe("PATCH /api/units/:id/release-block", () => {
     expect(await statusOf(unavailable.id)).toBe("UNAVAILABLE");
   });
 });
+
+describe("PATCH /api/units/:id/release-block by holder", () => {
+  let officerSeq = 0;
+  async function makeOfficerUser() {
+    officerSeq += 1;
+    const user = await prisma.user.create({
+      data: { name: `Holder ${officerSeq}`, email: `holder-${officerSeq}@x.com`, passwordHash: "x", role: "LEASING_OFFICER" },
+    });
+    return { user, token: tokens.officer(user.id) };
+  }
+  // A BLOCKED unit whose holder deal is assigned to `assignedOfficerId` (or nobody).
+  async function heldUnit(txnOver = {}) {
+    const owner = await factory.owner();
+    const tenant = await factory.tenant();
+    const txn = await makeTxn({ tenantId: tenant.id, ...txnOver });
+    const unit = await factory.unit(owner.id, { status: "BLOCKED", blockedByTransactionId: txn.id });
+    await prisma.leasingTransaction.update({ where: { id: txn.id }, data: { unitId: unit.id } });
+    return { unit, txn };
+  }
+
+  it("refuses another officer while the holder deal is live (409), but the holder officer and an admin can release", async () => {
+    const a = await makeOfficerUser();
+    const b = await makeOfficerUser();
+
+    const first = await heldUnit({ assignedOfficerId: a.user.id });
+    const denied = await patch(`${first.unit.id}/release-block`, b.token);
+    expect(denied.status).toBe(409);
+    expect(denied.body.error).toBe(`This unit is held by deal ${first.txn.reference}; release it from that deal`);
+    const still = await prisma.unit.findUnique({ where: { id: first.unit.id } });
+    expect(still.status).toBe("BLOCKED");
+    expect(still.blockedByTransactionId).toBe(first.txn.id);
+
+    const byHolder = await patch(`${first.unit.id}/release-block`, a.token);
+    expect(byHolder.status).toBe(200);
+    expect(byHolder.body.status).toBe("VACANT");
+
+    const second = await heldUnit({ assignedOfficerId: a.user.id });
+    const byAdmin = await patch(`${second.unit.id}/release-block`, tokens.admin());
+    expect(byAdmin.status).toBe(200);
+    expect(await statusOf(second.unit.id)).toBe("VACANT");
+  });
+
+  it("a block with no pointer is releasable by any officer", async () => {
+    const b = await makeOfficerUser();
+    const owner = await factory.owner();
+    const unit = await factory.unit(owner.id, { status: "BLOCKED" });
+
+    const res = await patch(`${unit.id}/release-block`, b.token);
+    expect(res.status).toBe(200);
+    expect(await statusOf(unit.id)).toBe("VACANT");
+  });
+
+  it("a block whose holder deal has ended is releasable by any officer", async () => {
+    const a = await makeOfficerUser();
+    const b = await makeOfficerUser();
+    const { unit } = await heldUnit({ assignedOfficerId: a.user.id, stage: "CONTRACT_SIGNING", status: "Declined", finalStatus: "Declined" });
+
+    const res = await patch(`${unit.id}/release-block`, b.token);
+    expect(res.status).toBe(200);
+    expect(await statusOf(unit.id)).toBe("VACANT");
+  });
+
+  it("a block held by an unassigned deal is releasable by any officer", async () => {
+    const b = await makeOfficerUser();
+    const { unit } = await heldUnit();
+
+    const res = await patch(`${unit.id}/release-block`, b.token);
+    expect(res.status).toBe(200);
+    expect(await statusOf(unit.id)).toBe("VACANT");
+  });
+});

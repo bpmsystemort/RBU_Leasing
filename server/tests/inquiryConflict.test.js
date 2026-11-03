@@ -212,3 +212,51 @@ describe("Two officers accepting two inquiries for one unit at once", () => {
     expect(prospectDeals).toBe(won);
   });
 });
+
+describe("Deals that died before Contract Signing", () => {
+  it.each([
+    ["INQUIRY", "Not Qualified"],
+    ["INQUIRY", "Declined"],
+    ["UNIT_VIEWING", "Not Interested"],
+  ])("no longer hold the unit: a deal at %s / %s lets a new inquiry be accepted", async (stage, status) => {
+    const unit = await makeUnit();
+    await makeDeal(unit.id, { stage, status });
+    const inq = await makeInquiry({ unitId: unit.id });
+    const { token } = await makeOfficer();
+
+    const res = await accept(inq.id, token);
+    expect(res.status).toBe(200);
+    expect(await prisma.leasingTransaction.findUnique({ where: { inquiryId: inq.id } })).not.toBeNull();
+    expect(await dealsOn(unit.id)).toBe(2);
+  });
+
+  it.each([
+    ["INQUIRY", "Under Review"],
+    ["INQUIRY", "Qualified"],
+    ["UNIT_VIEWING", "Pending"],
+    ["UNIT_VIEWING", "Interested"],
+    ["UNIT_VIEWING", "No-show"],
+  ])("a deal at %s / %s still holds the unit (409)", async (stage, status) => {
+    const unit = await makeUnit({ unitNumber: "5E" });
+    const rival = await makeDeal(unit.id, { stage, status });
+    const inq = await makeInquiry({ unitId: unit.id });
+    const { token } = await makeOfficer();
+
+    const res = await accept(inq.id, token);
+    expect(res.status).toBe(409);
+    expect(res.body.error).toContain(rival.reference);
+    expect(await dealsOn(unit.id)).toBe(1);
+  });
+
+  it("names the remedy in the refusal", async () => {
+    const unit = await makeUnit({ unitNumber: "9F" });
+    const rival = await makeDeal(unit.id);
+    const inq = await makeInquiry({ unitId: unit.id });
+    const { token } = await makeOfficer();
+
+    const res = await accept(inq.id, token);
+    expect(res.status).toBe(409);
+    expect(res.body.error).toBe(
+      `Unit 9F already has an active deal (${rival.reference}) for another prospect; unlink the unit from that deal or close it first`);
+  });
+});

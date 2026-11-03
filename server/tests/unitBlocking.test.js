@@ -528,3 +528,131 @@ describe("Public listing", () => {
     expect(back.body).toHaveLength(1);
   });
 });
+
+describe("A signed deal stays signed", () => {
+  const setStatus = (id, status) => call("patch", id, "status", tokens.officer(), { status });
+  const signedDeal = async () => {
+    const unit = await makeUnit();
+    const deal = await makeDeal(unit.id, { stage: "CONTRACT_SIGNING", status: "Pending", finalStatus: "Pending" });
+    await block(deal.id);
+    expect((await setStatus(deal.id, "Signed")).status).toBe(200);
+    return { unit, deal };
+  };
+
+  it("refuses to move a Signed deal to Declined (409); the unit stays OCCUPIED", async () => {
+    const { unit, deal } = await signedDeal();
+
+    const res = await setStatus(deal.id, "Declined");
+    expect(res.status).toBe(409);
+    expect(res.body.error).toBe("A signed deal cannot be changed");
+
+    expect((await unitOf(unit.id)).status).toBe("OCCUPIED");
+    const after = await prisma.leasingTransaction.findUnique({ where: { id: deal.id } });
+    expect(after.finalStatus).toBe("Signed");
+    expect(after.status).toBe("Signed");
+  });
+
+  it("refuses to move a Signed deal back to Pending (409)", async () => {
+    const { unit, deal } = await signedDeal();
+
+    const res = await setStatus(deal.id, "Pending");
+    expect(res.status).toBe(409);
+    const after = await prisma.leasingTransaction.findUnique({ where: { id: deal.id } });
+    expect(after.finalStatus).toBe("Signed");
+    expect((await unitOf(unit.id)).status).toBe("OCCUPIED");
+  });
+
+  it("re-saving Signed succeeds, keeps the unit OCCUPIED and logs no misleading 'check its status' note", async () => {
+    const { unit, deal } = await signedDeal();
+
+    const res = await call("patch", deal.id, "status", tokens.officer(), { status: "Signed", remarks: "Contract re-uploaded" });
+    expect(res.status).toBe(200);
+    expect(res.body.finalStatus).toBe("Signed");
+
+    expect((await unitOf(unit.id)).status).toBe("OCCUPIED");
+    const messages = await messagesOf(deal.id);
+    expect(messages.filter((m) => m.includes("check its status"))).toEqual([]);
+    expect(messages.filter((m) => m === "Unit marked occupied (contract signed)")).toHaveLength(1);
+    expect(messages.filter((m) => m.startsWith('Contract Signing status set to "Signed"'))).toHaveLength(2);
+  });
+});
+
+describe("Declining by advancing into the final stage", () => {
+  it("releases the block when advancing straight into Contract Signing as Declined", async () => {
+    const unit = await makeUnit();
+    const tenant = await factory.tenant({ name: "Ana" });
+    const deal = await makeTxn({
+      unitId: unit.id, tenantId: tenant.id, stage: "PHOTOSHOOT", status: "Completed",
+    });
+    await prisma.transactionDocument.create({
+      data: {
+        transactionId: deal.id, filename: "loi.pdf", mimeType: "application/pdf",
+        size: 3, data: Buffer.from("abc"), docType: "LETTER_OF_INTENT",
+      },
+    });
+    await block(deal.id);
+
+    const res = await call("patch", deal.id, "advance", tokens.officer(), { status: "Declined" });
+    expect(res.status).toBe(200);
+    expect(res.body.finalStatus).toBe("Declined");
+
+    const after = await unitOf(unit.id);
+    expect(after.status).toBe("VACANT");
+    expect(after.blockedByTransactionId).toBeNull();
+    expect(await messagesOf(deal.id)).toContain("Unit block released (deal declined)");
+  });
+});
+
+describe("Deleting a deal that holds a unit", () => {
+  it("frees the unit instead of leaving a holderless block", async () => {
+    const unit = await makeUnit();
+    const deal = await makeDeal(unit.id);
+    await block(deal.id);
+    expect((await unitOf(unit.id)).status).toBe("BLOCKED");
+
+    const res = await request(app).delete(`/api/leasing-transactions/${deal.id}`).set(auth(tokens.admin()));
+    expect(res.status).toBe(204);
+
+    const after = await unitOf(unit.id);
+    expect(after.status).toBe("VACANT");
+    expect(after.blockedByTransactionId).toBeNull();
+    expect(await prisma.leasingTransaction.findUnique({ where: { id: deal.id } })).toBeNull();
+  });
+
+  it("leaves a block held by a different deal alone", async () => {
+    const unit = await makeUnit();
+    const holder = await makeDeal(unit.id);
+    const other = await makeDeal(unit.id);
+    await block(holder.id);
+
+    expect((await request(app).delete(`/api/leasing-transactions/${other.id}`).set(auth(tokens.admin()))).status).toBe(204);
+    const after = await unitOf(unit.id);
+    expect(after.status).toBe("BLOCKED");
+    expect(after.blockedByTransactionId).toBe(holder.id);
+  });
+});
+
+describe("Reviving a declined deal", () => {
+  it("refuses to return a Declined deal when another active deal has taken the unit (409)", async () => {
+    const unit = await makeUnit();
+    const declined = await makeDeal(unit.id, { stage: "CONTRACT_SIGNING", status: "Declined", finalStatus: "Declined" });
+    await makeDeal(unit.id); // a live rival
+
+    const res = await call("patch", declined.id, "return", tokens.officer(), {});
+    expect(res.status).toBe(409);
+    expect(res.body.error).toBe("Another active deal now exists on this unit");
+    const after = await prisma.leasingTransaction.findUnique({ where: { id: declined.id } });
+    expect(after.stage).toBe("CONTRACT_SIGNING");
+    expect(after.finalStatus).toBe("Declined");
+  });
+
+  it("still returns a Declined deal when nothing else is active on its unit", async () => {
+    const unit = await makeUnit();
+    const declined = await makeDeal(unit.id, { stage: "CONTRACT_SIGNING", status: "Declined", finalStatus: "Declined" });
+
+    const res = await call("patch", declined.id, "return", tokens.officer(), {});
+    expect(res.status).toBe(200);
+    expect(res.body.stage).toBe("PHOTOSHOOT");
+    expect(res.body.finalStatus).toBeNull();
+  });
+});
