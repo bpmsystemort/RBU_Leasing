@@ -72,3 +72,23 @@ describe("schedulable stages", () => {
     expect(APPOINTMENT_STATUSES).toEqual(["Proposed", "Confirmed", "Scheduled", "Rescheduled", "Completed", "Cancelled", "No-show"]);
   });
 });
+
+import { DEAD_EARLY_STATES, isDeadEarly, isValidStatus } from "../../shared/leasingStages.js";
+
+describe("Dead-early states", () => {
+  it("every listed state is a real status of its stage", () => {
+    for (const d of DEAD_EARLY_STATES) {
+      for (const status of d.statuses) expect(isValidStatus(d.stage, status)).toBe(true);
+    }
+  });
+  it("isDeadEarly is true only for those states", () => {
+    expect(isDeadEarly({ stage: "INQUIRY", status: "Not Qualified" })).toBe(true);
+    expect(isDeadEarly({ stage: "INQUIRY", status: "Declined" })).toBe(true);
+    expect(isDeadEarly({ stage: "UNIT_VIEWING", status: "Not Interested" })).toBe(true);
+    expect(isDeadEarly({ stage: "UNIT_VIEWING", status: "No-show" })).toBe(false);
+    expect(isDeadEarly({ stage: "INQUIRY", status: "Qualified" })).toBe(false);
+    // Declined at Contract Signing ends a deal through finalStatus, not this list.
+    expect(isDeadEarly({ stage: "CONTRACT_SIGNING", status: "Declined" })).toBe(false);
+    expect(isDeadEarly(null)).toBe(false);
+  });
+});

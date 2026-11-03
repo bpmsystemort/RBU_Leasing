@@ -84,6 +84,20 @@ export function isValidStatus(stageKey, status) {
   return !!s && s.statuses.includes(status);
 }
 
+// States that END a deal before it reaches Contract Signing (the only stage that
+// writes finalStatus): the prospect was not qualified or declined at the
+// inquiry, or lost interest at the viewing. There is no Cancelled status. The
+// server (active-deal check, unit blocking) and the client (blocking console)
+// both read this one list so they cannot drift.
+export const DEAD_EARLY_STATES = [
+  { stage: "INQUIRY", statuses: ["Not Qualified", "Declined"] },
+  { stage: "UNIT_VIEWING", statuses: ["Not Interested"] },
+];
+// Is a deal sitting in a dead-early state? Takes anything with `stage` and `status`.
+export function isDeadEarly(deal) {
+  return DEAD_EARLY_STATES.some((d) => d.stage === deal?.stage && d.statuses.includes(deal?.status));
+}
+
 // --- Scheduling (sub-project H) ---------------------------------------------
 // The stages that carry an appointment. `defaultOutcome` is the stage status
 // set when the appointment is completed; `outcomeOptions` (inspection) lets the

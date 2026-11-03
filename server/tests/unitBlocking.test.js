@@ -655,4 +655,172 @@ describe("Reviving a declined deal", () => {
     expect(res.body.stage).toBe("PHOTOSHOOT");
     expect(res.body.finalStatus).toBeNull();
   });
+
+  it("refuses to set a Declined deal to Signed while another active deal holds the unit (409); nothing changes", async () => {
+    const unit = await makeUnit();
+    const declined = await makeDeal(unit.id, { stage: "CONTRACT_SIGNING", status: "Declined", finalStatus: "Declined" });
+    const rival = await makeDeal(unit.id);
+    await block(rival.id);
+
+    const res = await call("patch", declined.id, "status", tokens.officer(), { status: "Signed" });
+    expect(res.status).toBe(409);
+    expect(res.body.error).toBe("Another active deal now exists on this unit");
+
+    const after = await prisma.leasingTransaction.findUnique({ where: { id: declined.id } });
+    expect(after.status).toBe("Declined");
+    expect(after.finalStatus).toBe("Declined");
+    const held = await unitOf(unit.id);
+    expect(held.status).toBe("BLOCKED");
+    expect(held.blockedByTransactionId).toBe(rival.id);
+  });
+
+  it("still lets a Declined deal be set to Signed when nothing else is active on its unit", async () => {
+    const unit = await makeUnit();
+    const declined = await makeDeal(unit.id, { stage: "CONTRACT_SIGNING", status: "Declined", finalStatus: "Declined" });
+
+    const res = await call("patch", declined.id, "status", tokens.officer(), { status: "Signed" });
+    expect(res.status).toBe(200);
+    expect(res.body.finalStatus).toBe("Signed");
+    expect((await unitOf(unit.id)).status).toBe("OCCUPIED");
+  });
+});
+
+describe("A deal that dies early gives its unit back", () => {
+  const setStatus = (id, status) => call("patch", id, "status", tokens.officer(), { status });
+  const schedule = (id) =>
+    request(app).post(`/api/appointments/transaction/${id}/UNIT_VIEWING`).set(auth(tokens.officer()))
+      .send({ scheduledAt: "2026-10-20T04:00:00.000Z" });
+
+  it.each([
+    ["UNIT_VIEWING", "Pending", "Not Interested"],
+    ["INQUIRY", "Under Review", "Not Qualified"],
+    ["INQUIRY", "Under Review", "Declined"],
+  ])("releases the block when a deal at %s (%s) is set to %s", async (stage, before, dead) => {
+    const unit = await makeUnit();
+    const deal = await makeDeal(unit.id, { stage, status: before });
+    expect((await block(deal.id)).status).toBe(200);
+    expect((await unitOf(unit.id)).status).toBe("BLOCKED");
+
+    const res = await setStatus(deal.id, dead);
+    expect(res.status).toBe(200);
+
+    const after = await unitOf(unit.id);
+    expect(after.status).toBe("VACANT");
+    expect(after.blockedByTransactionId).toBeNull();
+    expect(await messagesOf(deal.id)).toContain("Unit block released (deal ended)");
+  });
+
+  it("leaves a block held by a different deal alone when this deal dies", async () => {
+    const unit = await makeUnit();
+    const holder = await makeDeal(unit.id);
+    await block(holder.id);
+    const other = await makeDeal(unit.id);
+
+    expect((await setStatus(other.id, "Not Interested")).status).toBe(200);
+    const after = await unitOf(unit.id);
+    expect(after.status).toBe("BLOCKED");
+    expect(after.blockedByTransactionId).toBe(holder.id);
+    expect(await messagesOf(other.id)).not.toContain("Unit block released (deal ended)");
+  });
+
+  it("a status that keeps the deal alive does not release the block", async () => {
+    const unit = await makeUnit();
+    const deal = await makeDeal(unit.id);
+    await block(deal.id);
+
+    expect((await setStatus(deal.id, "Interested")).status).toBe(200);
+    const after = await unitOf(unit.id);
+    expect(after.status).toBe("BLOCKED");
+    expect(after.blockedByTransactionId).toBe(deal.id);
+  });
+
+  it("a dead early deal cannot block a unit (409 This deal has ended)", async () => {
+    const unit = await makeUnit();
+    for (const [stage, status] of [["UNIT_VIEWING", "Not Interested"], ["INQUIRY", "Not Qualified"], ["INQUIRY", "Declined"]]) {
+      const deal = await makeDeal(unit.id, { stage, status });
+      const res = await block(deal.id);
+      expect(res.status).toBe(409);
+      expect(res.body.error).toBe("This deal has ended");
+    }
+    const after = await unitOf(unit.id);
+    expect(after.status).toBe("VACANT");
+    expect(after.blockedByTransactionId).toBeNull();
+  });
+
+  it("a viewing outcome of Not Interested releases the deal's block", async () => {
+    const unit = await makeUnit();
+    const deal = await makeDeal(unit.id);
+    expect((await block(deal.id)).status).toBe(200);
+    const appt = await schedule(deal.id);
+    expect(appt.status).toBe(201);
+
+    const done = await request(app).patch(`/api/appointments/${appt.body.id}/complete`)
+      .set(auth(tokens.officer())).send({ outcome: "Not Interested" });
+    expect(done.status).toBe(200);
+
+    const txn = await prisma.leasingTransaction.findUnique({ where: { id: deal.id } });
+    expect(txn.status).toBe("Not Interested");
+    const after = await unitOf(unit.id);
+    expect(after.status).toBe("VACANT");
+    expect(after.blockedByTransactionId).toBeNull();
+    expect(await messagesOf(deal.id)).toContain("Unit block released (deal ended)");
+  });
+
+  it("a viewing outcome of Interested keeps the block", async () => {
+    const unit = await makeUnit();
+    const deal = await makeDeal(unit.id);
+    await block(deal.id);
+    const appt = await schedule(deal.id);
+
+    const done = await request(app).patch(`/api/appointments/${appt.body.id}/complete`)
+      .set(auth(tokens.officer())).send({ outcome: "Interested" });
+    expect(done.status).toBe(200);
+    const after = await unitOf(unit.id);
+    expect(after.status).toBe("BLOCKED");
+    expect(after.blockedByTransactionId).toBe(deal.id);
+  });
+
+  it("refuses to set a Not Interested deal back to a live status while a rival deal exists (409)", async () => {
+    const unit = await makeUnit();
+    const dead = await makeDeal(unit.id, { stage: "UNIT_VIEWING", status: "Not Interested" });
+    await makeDeal(unit.id); // a live rival
+
+    const res = await setStatus(dead.id, "Interested");
+    expect(res.status).toBe(409);
+    expect(res.body.error).toBe("Another active deal now exists on this unit");
+    const after = await prisma.leasingTransaction.findUnique({ where: { id: dead.id } });
+    expect(after.status).toBe("Not Interested");
+  });
+
+  it("lets a Not Interested deal come back to a live status when nothing else is active on the unit", async () => {
+    const unit = await makeUnit();
+    const dead = await makeDeal(unit.id, { stage: "UNIT_VIEWING", status: "Not Interested" });
+
+    const res = await setStatus(dead.id, "Interested");
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe("Interested");
+  });
+
+  it("refuses to re-propose a viewing for a Not Interested deal while a rival exists (409), writing nothing", async () => {
+    const unit = await makeUnit();
+    const dead = await makeDeal(unit.id, { stage: "UNIT_VIEWING", status: "Not Interested" });
+    await makeDeal(unit.id);
+
+    const res = await schedule(dead.id);
+    expect(res.status).toBe(409);
+    expect(res.body.error).toBe("Another active deal now exists on this unit");
+    expect(await prisma.appointment.count({ where: { transactionId: dead.id } })).toBe(0);
+    const after = await prisma.leasingTransaction.findUnique({ where: { id: dead.id } });
+    expect(after.status).toBe("Not Interested");
+  });
+
+  it("re-proposes a viewing for a Not Interested deal when nothing else is active (the deal lives again)", async () => {
+    const unit = await makeUnit();
+    const dead = await makeDeal(unit.id, { stage: "UNIT_VIEWING", status: "Not Interested" });
+
+    const res = await schedule(dead.id);
+    expect(res.status).toBe(201);
+    const after = await prisma.leasingTransaction.findUnique({ where: { id: dead.id } });
+    expect(after.status).toBe("Proposed");
+  });
 });

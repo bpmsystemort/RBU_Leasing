@@ -2,7 +2,7 @@ import { prisma } from "../lib/prisma.js";
 import { NotFoundError, InvalidReferenceError, ConflictError, ForbiddenError } from "../lib/errors.js";
 import {
   LEASING_STAGES, STAGE_KEYS, stageByKey, stageIndex, nextStageKey, prevStageKey, isValidStatus, isFinalStage,
-  APPROVAL_ROUTING, APPROVAL_STEP_STATUSES,
+  APPROVAL_ROUTING, APPROVAL_STEP_STATUSES, DEAD_EARLY_STATES, isDeadEarly,
 } from "../../../shared/leasingStages.js";
 import { TRANSACTION_DOCUMENT_KEYS, labelForDocType } from "../../../shared/transactionDocuments.js";
 import { UNIT_HIERARCHY_INCLUDE } from "../lib/unitInclude.js";
@@ -134,18 +134,25 @@ export async function openTransactionForUnit(unitId) {
 
 // --- unit availability guards ----------------------------------------------
 
-const OPEN = { OR: [{ finalStatus: null }, { finalStatus: { notIn: ["Signed", "Declined"] } }] };
+// Re-exported so callers (appointmentService, tests) reach it through the service.
+export { isDeadEarly };
+
+const FINAL_ENDED = ["Signed", "Declined"];
+const OPEN = { OR: [{ finalStatus: null }, { finalStatus: { notIn: FINAL_ENDED } }] };
 const HAS_PROSPECT = { OR: [{ inquiryId: { not: null } }, { tenantId: { not: null } }] };
 
 // A deal that died before it reached Contract Signing (the prospect was not
 // qualified, declined, or lost interest at the viewing) never closes through
-// finalStatus, so it would otherwise hold the unit forever.
+// finalStatus, so it would otherwise hold the unit forever. Built from the same
+// DEAD_EARLY_STATES list isDeadEarly() reads, so the query and the check agree.
 const NOT_DEAD_EARLY = {
-  NOT: [
-    { stage: "INQUIRY", status: { in: ["Not Qualified", "Declined"] } },
-    { stage: "UNIT_VIEWING", status: "Not Interested" },
-  ],
+  NOT: DEAD_EARLY_STATES.map((d) => ({ stage: d.stage, status: { in: d.statuses } })),
 };
+
+// A deal that is over: signed, declined at Contract Signing, or dead early.
+function isEnded(deal) {
+  return FINAL_ENDED.includes(deal?.finalStatus) || isDeadEarly(deal);
+}
 
 // A deal with a prospect that has not ended. The lessor-onboarding transaction
 // that ensureForUnit opens has no prospect, so it never counts: only a deal
@@ -194,9 +201,9 @@ export async function releaseUnitBlock(actor, unitId) {
   if (unit.blockedByTransactionId && actor?.role !== "ADMIN") {
     const holder = await prisma.leasingTransaction.findUnique({
       where: { id: unit.blockedByTransactionId },
-      select: { reference: true, finalStatus: true, assignedOfficerId: true },
+      select: { reference: true, stage: true, status: true, finalStatus: true, assignedOfficerId: true },
     });
-    const live = holder && !["Signed", "Declined"].includes(holder.finalStatus);
+    const live = holder && !isEnded(holder);
     if (live && holder.assignedOfficerId && holder.assignedOfficerId !== actor?.userId) {
       throw new ConflictError(`This unit is held by deal ${holder.reference}; release it from that deal`);
     }
@@ -346,7 +353,7 @@ export async function blockUnit(actor, id) {
   const txn = await loadOrThrow(id);
   if (!txn.unitId) throw new ConflictError("Link a unit before blocking it");
   if (!txn.inquiryId && !txn.tenantId) throw new ConflictError("Only a deal with a prospect can block a unit");
-  if (["Signed", "Declined"].includes(txn.finalStatus)) throw new ConflictError("This deal has ended");
+  if (isEnded(txn)) throw new ConflictError("This deal has ended");
   const unit = await prisma.unit.findUnique({ where: { id: txn.unitId }, select: { status: true, unitNumber: true, blockedByTransactionId: true } });
   if (unit?.status === "BLOCKED" && unit.blockedByTransactionId === id) return getTransaction(id); // idempotent
   const claimed = await prisma.unit.updateMany({
@@ -369,6 +376,39 @@ async function releaseBlockFor(transactionId, client = prisma) {
     data: { status: "VACANT", blockedByTransactionId: null },
   });
   return r.count > 0;
+}
+
+// Releases the unit a deal that has just ended is holding and records it. Used
+// by appointmentService when a viewing outcome ("Not Interested") ends a deal.
+// The release is already committed when the audit event is written, so a failed
+// event is logged and swallowed rather than failing the request. Returns true
+// when a unit was released.
+export async function releaseBlockForDeal(actor, transactionId, stage) {
+  const released = await releaseBlockFor(transactionId);
+  if (released) {
+    try {
+      await logEvent(transactionId, actor, "Unit block released (deal ended)", stage);
+    } catch (e) {
+      console.error("Unit block release event not logged:", e.message);
+    }
+  }
+  return released;
+}
+
+// A deal that has moved from an ended state back to a live one makes itself
+// active again. Refuse when another deal has taken the unit in the meantime,
+// otherwise the unit would carry two active deals. `targetStage`/`targetStatus`
+// is the state the deal is about to take; moving between ended states (e.g.
+// Declined to Not Interested) is not a revival. Does nothing (and queries
+// nothing) for a deal that is not ended now or has no unit.
+export async function assertNoRivalOnRevival(txn, targetStage, targetStatus) {
+  if (!txn.unitId) return;
+  const endedNow = txn.finalStatus === "Declined" || isDeadEarly(txn);
+  if (!endedNow) return;
+  const targetEnded = targetStatus === "Declined" || isDeadEarly({ stage: targetStage, status: targetStatus });
+  if (targetEnded) return;
+  const rival = await activeDealForUnit(txn.unitId, txn.id);
+  if (rival) throw new ConflictError("Another active deal now exists on this unit");
 }
 
 export async function unblockUnit(actor, id) {
@@ -406,6 +446,9 @@ export async function setStatus(actor, id, { status, remarks }) {
   if (!isValidStatus(txn.stage, status)) {
     throw new InvalidReferenceError(`"${status}" is not a valid status for this stage`);
   }
+  // Moving an ended deal (Declined, or dead early) back to a live status
+  // revives it: refuse when another deal has taken the unit since.
+  await assertNoRivalOnRevival(txn, txn.stage, status);
   const stageData = { ...(txn.stageData || {}) };
   stageData[txn.stage] = { ...(stageData[txn.stage] || {}), status, remarks: remarks ?? stageData[txn.stage]?.remarks ?? "" };
   const patch = { status, stageData };
@@ -414,12 +457,15 @@ export async function setStatus(actor, id, { status, remarks }) {
   // Re-saving Signed (e.g. the signed contract uploaded again) updates the
   // remarks but must not settle the unit a second time.
   const alreadySigned = txn.finalStatus === "Signed";
-  const { note } = await prisma.$transaction(async (tx) => {
+  const { note, deadReleased } = await prisma.$transaction(async (tx) => {
     const row = await tx.leasingTransaction.update({ where: { id }, data: patch });
-    return { note: alreadySigned ? null : await settleUnitOnOutcome(row, tx) };
+    // A deal that has just died early gives its unit back in the same commit.
+    const released = isDeadEarly(row) ? await releaseBlockFor(id, tx) : false;
+    return { note: alreadySigned ? null : await settleUnitOnOutcome(row, tx), deadReleased: released };
   });
   await logEvent(id, actor, `${stageByKey(txn.stage).label} status set to "${status}"${remarks ? ` — ${remarks}` : ""}`, txn.stage);
   if (note) await logEvent(id, actor, note, txn.stage);
+  if (deadReleased) await logEvent(id, actor, "Unit block released (deal ended)", txn.stage);
   return getTransaction(id);
 }
 
@@ -456,18 +502,24 @@ export async function advance(actor, id, { status, remarks } = {}) {
   stageData[txn.stage] = { ...(stageData[txn.stage] || {}), status: txn.status, completedAt: now };
   const nextCfg = stageByKey(next);
   const nextStatus = status && isValidStatus(next, status) ? status : nextCfg.initial;
+  // Advancing a dead-early deal (e.g. Not Qualified) revives it: refuse when
+  // another deal has taken the unit since.
+  await assertNoRivalOnRevival(txn, next, nextStatus);
   stageData[next] = { ...(stageData[next] || {}), status: nextStatus, startedAt: now, remarks: remarks || stageData[next]?.remarks || "" };
 
   const patch = { stage: next, status: nextStatus, stageData };
   if (isFinalStage(next)) patch.finalStatus = nextStatus;
 
-  const { note } = await prisma.$transaction(async (tx) => {
+  const { note, deadReleased } = await prisma.$transaction(async (tx) => {
     const row = await tx.leasingTransaction.update({ where: { id }, data: patch });
-    return { note: await settleUnitOnOutcome(row, tx) };
+    // Advancing straight into a dead-early status ends the deal as well.
+    const released = isDeadEarly(row) ? await releaseBlockFor(id, tx) : false;
+    return { note: await settleUnitOnOutcome(row, tx), deadReleased: released };
   });
   if (next === "APPROVAL") await ensureApprovalSteps(id);
   await logEvent(id, actor, `Advanced to ${nextCfg.label}${remarks ? ` — ${remarks}` : ""}`, next);
   if (note) await logEvent(id, actor, note, next);
+  if (deadReleased) await logEvent(id, actor, "Unit block released (deal ended)", next);
   return getTransaction(id);
 }
 
@@ -478,17 +530,15 @@ export async function returnStage(actor, id, { status, remarks } = {}) {
   if (txn.finalStatus === "Signed") throw new ConflictError("A signed deal cannot be returned to an earlier stage");
   const prev = prevStageKey(txn.stage);
   if (!prev) throw new ConflictError("The transaction is already at the first stage");
-  // Reviving a declined deal makes it active again: refuse when another deal has taken the unit meanwhile.
-  if (txn.finalStatus === "Declined" && txn.unitId && (await activeDealForUnit(txn.unitId, id))) {
-    throw new ConflictError("Another active deal now exists on this unit");
-  }
-
   const prevCfg = stageByKey(prev);
   const stageData = { ...(txn.stageData || {}) };
   // Reopen the previous stage.
   const prevStatus = status && isValidStatus(prev, status)
     ? status
     : (prevCfg.statuses.includes("For Revision") ? "For Revision" : prevCfg.initial);
+  // Reviving an ended deal (Declined, or dead early) makes it active again:
+  // refuse when another deal has taken the unit meanwhile.
+  await assertNoRivalOnRevival(txn, prev, prevStatus);
   const { completedAt, ...prevKept } = stageData[prev] || {};
   stageData[prev] = { ...prevKept, status: prevStatus, remarks: remarks || "" };
   // Drop the (now abandoned) current stage progress marker.
@@ -498,6 +548,8 @@ export async function returnStage(actor, id, { status, remarks } = {}) {
     where: { id }, data: { stage: prev, status: prevStatus, finalStatus: null, stageData },
   });
   await logEvent(id, actor, `Returned to ${prevCfg.label}${remarks ? ` — ${remarks}` : ""}`, prev);
+  // Returned straight into a dead-early status (the caller picked it): the deal is over.
+  if (isDeadEarly({ stage: prev, status: prevStatus })) await releaseBlockForDeal(actor, id, prev);
   return getTransaction(id);
 }
 

@@ -439,6 +439,21 @@ describe("PATCH /api/units/:id/release-block by holder", () => {
     expect(await statusOf(unit.id)).toBe("VACANT");
   });
 
+  it("a block held by a dead early deal is releasable by any officer; a live early one is not", async () => {
+    const a = await makeOfficerUser();
+    const b = await makeOfficerUser();
+    const dead = await heldUnit({ assignedOfficerId: a.user.id, stage: "UNIT_VIEWING", status: "Not Interested" });
+    const live = await heldUnit({ assignedOfficerId: a.user.id, stage: "UNIT_VIEWING", status: "No-show" });
+
+    const refused = await patch(`${live.unit.id}/release-block`, b.token);
+    expect(refused.status).toBe(409);
+    expect(await statusOf(live.unit.id)).toBe("BLOCKED");
+
+    const res = await patch(`${dead.unit.id}/release-block`, b.token);
+    expect(res.status).toBe(200);
+    expect(await statusOf(dead.unit.id)).toBe("VACANT");
+  });
+
   it("a block held by an unassigned deal is releasable by any officer", async () => {
     const b = await makeOfficerUser();
     const { unit } = await heldUnit();
