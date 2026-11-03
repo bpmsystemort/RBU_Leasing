@@ -60,5 +60,9 @@ export async function removeOwner(id) {
   await getOwner(id);
   const units = await prisma.unit.count({ where: { ownerId: id } });
   if (units > 0) throw new ConflictError(`Owner has ${units} unit(s); remove them first`);
+  // toOwnerId is a Restrict FK; without this check the delete would be a 500.
+  // (fromOwnerId is SET NULL, so it needs no check.)
+  const moves = await prisma.unitAssignmentEvent.count({ where: { toOwnerId: id } });
+  if (moves > 0) throw new ConflictError("Owner appears in unit assignment history; it cannot be deleted");
   await prisma.unitOwner.delete({ where: { id } });
 }

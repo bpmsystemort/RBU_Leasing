@@ -3,6 +3,11 @@ import { NotFoundError, ConflictError, InvalidReferenceError } from "../lib/erro
 import { ensureForUnit, activeDealForUnit } from "./leasingTransactionService.js";
 
 const withHierarchy = { tower: { include: { estate: true } }, owner: { select: { id: true, name: true } } };
+// Staff additionally see whether the owner record still needs verification
+// (owner.needsReview). Owners themselves keep the plain { id, name } shape.
+const withHierarchyStaff = { tower: { include: { estate: true } }, owner: { select: { id: true, name: true, needsReview: true } } };
+const STAFF_ROLES = ["ADMIN", "LEASING_OFFICER", "VIEWER"];
+const includeFor = (user) => (user && STAFF_ROLES.includes(user.role) ? withHierarchyStaff : withHierarchy);
 
 async function assertOwnerExists(ownerId) {
   const owner = await prisma.unitOwner.findUnique({ where: { id: ownerId } });
@@ -14,7 +19,7 @@ async function assertTowerExists(towerId) {
   if (!tower) throw new InvalidReferenceError("towerId does not reference an existing tower");
 }
 
-export function listUnits({ ownerId, status, estateId, towerId, approvalStatus, assignedOfficerId, needsStatusReview } = {}) {
+export function listUnits({ ownerId, status, estateId, towerId, approvalStatus, assignedOfficerId, needsStatusReview } = {}, include = withHierarchy) {
   const where = {};
   if (ownerId) where.ownerId = ownerId;
   if (status) where.status = status;
@@ -26,7 +31,7 @@ export function listUnits({ ownerId, status, estateId, towerId, approvalStatus, 
   // leases have ended, flagging it here instead — this lets staff pull up
   // just the rows that need a manual status decision.
   if (needsStatusReview === "true" || needsStatusReview === true) where.needsStatusReview = true;
-  return prisma.unit.findMany({ where, include: withHierarchy, orderBy: { createdAt: "desc" } });
+  return prisma.unit.findMany({ where, include, orderBy: { createdAt: "desc" } });
 }
 
 // A UNIT_OWNER only ever sees their own owner's units. A LEASING_OFFICER sees
@@ -35,7 +40,7 @@ export function listUnitsForUser(user, filters = {}) {
   const f = { ...filters };
   if (user.role === "UNIT_OWNER") f.ownerId = user.unitOwnerId || "__none__";
   else if (user.role === "LEASING_OFFICER") f.assignedOfficerId = user.userId;
-  return listUnits(f);
+  return listUnits(f, includeFor(user));
 }
 
 export async function createUnitForUser(user, data) {
@@ -101,14 +106,14 @@ export async function rejectUnit(id, remarks) {
   });
 }
 
-export async function getUnit(id) {
-  const unit = await prisma.unit.findUnique({ where: { id }, include: withHierarchy });
+export async function getUnit(id, include = withHierarchy) {
+  const unit = await prisma.unit.findUnique({ where: { id }, include });
   if (!unit) throw new NotFoundError("Unit not found");
   return unit;
 }
 
 export async function getUnitForUser(user, id) {
-  const unit = await getUnit(id);
+  const unit = await getUnit(id, includeFor(user));
   if (user && user.role === "UNIT_OWNER" && unit.ownerId !== user.unitOwnerId) {
     throw new NotFoundError("Unit not found");
   }

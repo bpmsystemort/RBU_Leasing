@@ -20,3 +20,8 @@ export const unitCreateSchema = z.object({
 export const unitUpdateSchema = unitCreateSchema.partial();
 
 export const unitRejectSchema = z.object({ remarks: z.string().min(1, "A remark is required") });
+
+export const assignOwnerSchema = z.object({
+  toOwnerId: z.string().min(1),
+  reason: z.string().trim().max(500).nullish(),
+});
