@@ -13,12 +13,14 @@ export const STAFF_NAV = [
       { to: "/app/units", label: "Unit List", icon: "building" },
       { to: "/app/approvals", label: "Approvals", icon: "check", write: true },
       { to: "/app/import", label: "Import Portfolio", icon: "download", admin: true },
+      { to: "/app/unit-assignments", label: "Unit-Owner Assignments", icon: "users", admin: true },
     ] },
     { label: "Inquiries", items: [
       { to: "/app/inquiries", label: "Inquiry List", icon: "message" },
     ] },
     { label: "Leasing Management", items: [
       { to: "/app/transactions", label: "Leasing Tracker", icon: "activity" },
+      { to: "/app/unit-blocking", label: "Unit Blocking", icon: "activity", write: true },
       { to: "/app/leases", label: "Leases & Contracts", icon: "file" },
     ] },
     { label: "Requirements & Documents", items: [

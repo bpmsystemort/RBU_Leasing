@@ -88,6 +88,31 @@ describe("router", () => {
     expect(router.currentRoute.value.path).toBe("/app/my-units");
   });
 
+  it("gates Unit Blocking to the write roles and Unit-Owner Assignments to ADMIN", () => {
+    const blocking = router.resolve("/app/unit-blocking");
+    expect(blocking.matched.length).toBeGreaterThan(0);
+    expect(blocking.meta.roles).toEqual(["ADMIN", "LEASING_OFFICER"]);
+    const assignments = router.resolve("/app/unit-assignments");
+    expect(assignments.matched.length).toBeGreaterThan(0);
+    expect(assignments.meta.roles).toEqual(["ADMIN"]);
+  });
+
+  it("sends a viewer away from Unit Blocking and an officer away from Unit-Owner Assignments", async () => {
+    useAuthStore().setSession({ token: "t", user: { role: "VIEWER" } });
+    await router.push("/app/unit-blocking");
+    expect(router.currentRoute.value.path).toBe("/app");
+
+    useAuthStore().setSession({ token: "t", user: { role: "LEASING_OFFICER" } });
+    await router.push("/app/unit-blocking");
+    expect(router.currentRoute.value.path).toBe("/app/unit-blocking");
+    await router.push("/app/unit-assignments");
+    expect(router.currentRoute.value.path).toBe("/app");
+
+    useAuthStore().setSession({ token: "t", user: { role: "ADMIN" } });
+    await router.push("/app/unit-assignments");
+    expect(router.currentRoute.value.path).toBe("/app/unit-assignments");
+  });
+
   it("every sidebar destination resolves to a real, role-gated app route", () => {
     for (const nav of [STAFF_NAV, OWNER_NAV, TENANT_NAV]) {
       for (const item of navItems(nav)) {

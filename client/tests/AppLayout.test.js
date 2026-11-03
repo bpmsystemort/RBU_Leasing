@@ -171,6 +171,18 @@ describe("AppLayout (sidebar shell)", () => {
     });
   });
 
+  it("lists the unit blocking and assignment pages by role", () => {
+    const adminNav = mountAs("ADMIN").find(".sidebar__nav").text();
+    expect(adminNav).toContain("Unit Blocking");
+    expect(adminNav).toContain("Unit-Owner Assignments");
+    const officerNav = mountAs("LEASING_OFFICER").find(".sidebar__nav").text();
+    expect(officerNav).toContain("Unit Blocking");
+    expect(officerNav).not.toContain("Unit-Owner Assignments");
+    const viewerNav = mountAs("VIEWER").find(".sidebar__nav").text();
+    expect(viewerNav).not.toContain("Unit Blocking");
+    expect(viewerNav).not.toContain("Unit-Owner Assignments");
+  });
+
   it("names the CMS section Content Manager, not Forms", () => {
     const nav = mountAs("ADMIN").find(".sidebar__nav");
     expect(nav.text()).toContain("Content Manager");

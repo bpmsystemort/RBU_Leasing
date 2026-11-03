@@ -49,6 +49,8 @@ const CmsFormBuilderView = () => import("../views/CmsFormBuilderView.vue");
 import TransactionsView from "../views/TransactionsView.vue";
 const TransactionDetailView = () => import("../views/TransactionDetailView.vue");
 import MyLeasingProgressView from "../views/MyLeasingProgressView.vue";
+import UnitBlockingView from "../views/UnitBlockingView.vue";
+import UnitOwnerAssignmentsView from "../views/UnitOwnerAssignmentsView.vue";
 
 const STAFF = ["ADMIN", "LEASING_OFFICER", "VIEWER"];
 const WRITE = ["ADMIN", "LEASING_OFFICER"];
@@ -100,6 +102,8 @@ const routes = [
       { path: "leases/new", component: LeaseFormView, meta: { roles: ADMIN } },
       { path: "leases/:id", component: LeaseFormView, meta: { roles: ADMIN } },
       { path: "approvals", component: ApprovalsView, meta: { roles: WRITE } },
+      { path: "unit-blocking", component: UnitBlockingView, meta: { roles: WRITE } },
+      { path: "unit-assignments", component: UnitOwnerAssignmentsView, meta: { roles: ADMIN } },
       { path: "lessor-sheets", component: LessorInfoSheetsView, meta: { roles: WRITE } },
       { path: "lessee-sheets", component: LesseeInfoSheetsView, meta: { roles: WRITE } },
       // Unit Owner (Lessor)
