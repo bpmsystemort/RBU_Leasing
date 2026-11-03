@@ -486,6 +486,15 @@ describe("PATCH /api/units/:id/mark-reviewed", () => {
     expect(await statusOf(unit.id)).toBe("OCCUPIED");
   });
 
+  it("returns the same staff shape as the unit list (owner.needsReview)", async () => {
+    const { unit } = await flagged();
+
+    const res = await patch(`${unit.id}/mark-reviewed`, tokens.officer());
+    expect(res.status).toBe(200);
+    expect(res.body.owner).toHaveProperty("needsReview");
+    expect(res.body).toHaveProperty("tower");
+  });
+
   it("is idempotent, and an admin can do it too", async () => {
     const { unit } = await flagged();
     expect((await patch(`${unit.id}/mark-reviewed`, tokens.admin())).status).toBe(200);

@@ -162,7 +162,12 @@ describe("import endpoints", () => {
 
 describe("commitWorkbook status pass and stale blocks", () => {
   it("a BLOCKED unit with an active lease ends OCCUPIED with its block pointer cleared", async () => {
-    const buf = await wbuf([R({ unit: "6D", ...ACTIVE })]);
+    // Dates relative to today, so the lease stays active whenever this runs
+    // (the shared ACTIVE constant ends on a fixed date).
+    const DAY = 24 * 60 * 60 * 1000;
+    const day = (offset) => new Date(new Date(Date.now() + offset * DAY).toISOString().slice(0, 10)); // whole days, like the other rows
+    const active = { start: day(-365), end: day(365) };
+    const buf = await wbuf([R({ unit: "6D", ...active })]);
     await commitWorkbook(buf);
     const unit = await prisma.unit.findFirstOrThrow({ where: { unitNumber: "6D" } });
     const txn = await prisma.leasingTransaction.create({

@@ -29,7 +29,12 @@ const DEALS = [
   { id: "t-tenant", reference: "LT-007", lesseeName: null, unitId: "v2", inquiryId: null, tenantId: "tn1", finalStatus: null, tenant: { id: "tn1", name: "Cora Lim" }, unit: { id: "v2", unitNumber: "6E" } },
   // not eligible: its unit is vacant but still SUBMITTED, so the approved-only vacant list leaves it out
   { id: "t-unapproved", reference: "LT-008", lesseeName: "Dina Uy", unitId: "v3", inquiryId: "q8", tenantId: null, finalStatus: null, unit: { id: "v3", unitNumber: "7F" } },
+  // not eligible: dead early (finalStatus stays null; only the stage/status say it ended)
+  { id: "t-notint", reference: "LT-009", lesseeName: "Gone Cold", unitId: "v2", inquiryId: "q9", tenantId: null, finalStatus: null, stage: "UNIT_VIEWING", status: "Not Interested", unit: { id: "v2", unitNumber: "6E" } },
+  { id: "t-notqual", reference: "LT-010", lesseeName: "Not Qualified", unitId: "v1", inquiryId: "q10", tenantId: null, finalStatus: null, stage: "INQUIRY", status: "Not Qualified", unit: { id: "v1", unitNumber: "5D" } },
 ];
+// A live deal in an early stage: still eligible (only the dead states are excluded).
+const LIVE_EARLY = { id: "t-live", reference: "LT-011", lesseeName: "Still Keen", unitId: "v1", inquiryId: "q11", tenantId: null, finalStatus: null, stage: "UNIT_VIEWING", status: "Interested", unit: { id: "v1", unitNumber: "5D" } };
 
 vi.mock("../src/lib/resource.js", () => ({
   units: {
@@ -181,6 +186,43 @@ describe("UnitBlockingView", () => {
     expect(text).not.toContain("7F");
     expect(w.findAll(".ready-row").find((r) => r.text().includes("LT-008"))).toBeUndefined();
     expect(w.findAll(".block-btn")).toHaveLength(2);
+  });
+
+  it("does not offer Block for a deal that died early, but still for a live early-stage deal", async () => {
+    leasingTransactions.list.mockImplementationOnce(() => Promise.resolve([...DEALS, LIVE_EARLY]));
+    const w = await mountView();
+    const text = w.find(".ready-table").text();
+    expect(text).not.toContain("LT-009"); // UNIT_VIEWING / Not Interested
+    expect(text).not.toContain("LT-010"); // INQUIRY / Not Qualified
+    expect(text).toContain("LT-011");
+    expect(w.findAll(".ready-row")).toHaveLength(3); // LT-002, LT-007, LT-011
+  });
+
+  it("keeps the tables and says the action was saved when the refresh after it fails", async () => {
+    const w = await mountView();
+    // the first units.list call of the next load (the refresh) is rejected
+    units.list.mockImplementationOnce(() => Promise.reject({ response: { data: { error: "Blocking is unavailable" } } }));
+    await w.findAll(".blocked-row")[1].find(".release-btn").trigger("click");
+    await flushPromises();
+    expect(units.releaseBlock).toHaveBeenCalledWith("b2");
+    expect(w.findAll(".error")).toHaveLength(1);
+    expect(w.find(".action-error").text()).toBe("Saved, but the list could not be refreshed. Reload the page.");
+    expect(w.findAll(".blocked-row")).toHaveLength(2);
+    expect(w.findAll(".ready-row")).toHaveLength(2);
+    // the button works again
+    expect(w.findAll(".blocked-row")[1].find(".release-btn").element.disabled).toBe(false);
+  });
+
+  it("keeps the server's refusal as the message when the refresh after a refused action also fails", async () => {
+    leasingTransactions.blockUnit.mockRejectedValueOnce({ response: { data: { error: "Unit 5D is blocked, not vacant" } } });
+    const w = await mountView();
+    units.list.mockImplementationOnce(() => Promise.reject(new Error("network")));
+    const row = w.findAll(".ready-row").find((r) => r.text().includes("LT-002"));
+    await row.find(".block-btn").trigger("click");
+    await flushPromises();
+    expect(w.find(".action-error").text()).toBe("Unit 5D is blocked, not vacant");
+    expect(w.findAll(".error")).toHaveLength(1);
+    expect(w.findAll(".ready-row")).toHaveLength(2);
   });
 
   it("shows only the error, not the empty-state text, when the first load fails", async () => {

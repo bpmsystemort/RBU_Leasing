@@ -1,6 +1,9 @@
 <script setup>
 import { ref, reactive, computed, onMounted } from "vue";
 import { units, leasingTransactions } from "../lib/resource.js";
+// The dead-early rule (a deal that ended before Contract Signing) is the same
+// list the server uses, so the console never offers to block for such a deal.
+import { isDeadEarly } from "../../../shared/leasingStages.js";
 
 // The reservation console. A deal with a prospect can hold (block) its unit so
 // nobody else can take it; this page lists what is currently held and which
@@ -43,14 +46,15 @@ const blockedRows = computed(() =>
   }),
 );
 
-// A deal can block only when it has a unit and a prospect, has not ended and its
-// unit is vacant right now.
+// A deal can block only when it has a unit and a prospect, has not ended (signed,
+// declined, or dead early) and its unit is vacant right now.
 const readyRows = computed(() => {
   const vacant = new Map(vacantUnits.value.map((u) => [u.id, u]));
   return deals.value
     .filter((t) => t.unitId
       && (t.inquiryId || t.tenantId)
       && !ENDED.includes(t.finalStatus)
+      && !isDeadEarly(t)
       && vacant.has(t.unitId))
     .map((t) => ({
       id: t.id,
@@ -61,18 +65,24 @@ const readyRows = computed(() => {
     }));
 });
 
+// Fetches all three lists and only then replaces them; throws when any request fails.
+async function fetchAll() {
+  const [b, v, t] = await Promise.all([
+    units.list({ status: "BLOCKED" }),
+    // only approved units can be reserved for a deal
+    units.list({ status: "VACANT", approvalStatus: "APPROVED" }),
+    leasingTransactions.list(),
+  ]);
+  blockedUnits.value = b;
+  vacantUnits.value = v;
+  deals.value = t;
+  loadError.value = "";
+}
+
+// The first load: a failure leaves nothing to show, so it hides the tables.
 async function load() {
   try {
-    const [b, v, t] = await Promise.all([
-      units.list({ status: "BLOCKED" }),
-      // only approved units can be reserved for a deal
-      units.list({ status: "VACANT", approvalStatus: "APPROVED" }),
-      leasingTransactions.list(),
-    ]);
-    blockedUnits.value = b;
-    vacantUnits.value = v;
-    deals.value = t;
-    loadError.value = "";
+    await fetchAll();
   } catch (e) {
     loadError.value = e.response?.data?.error || "Could not load unit blocking.";
   }
@@ -85,18 +95,29 @@ onMounted(async () => {
 
 // Run one action, then refresh both tables whether it worked or not (a refused
 // block usually means the unit was taken meanwhile). The server's own refusal
-// text is shown as-is.
+// text is shown as-is. A failed refresh never hides the tables (loadError is for
+// the first load only): after a saved action it says so, after a refused one the
+// refusal stays the message.
 async function run(key, call) {
   if (busy[key]) return;
   actionError.value = "";
   busy[key] = true;
   try {
-    await call();
-  } catch (e) {
-    actionError.value = e.response?.data?.error || "That action could not be completed.";
+    let saved = true;
+    try {
+      await call();
+    } catch (e) {
+      saved = false;
+      actionError.value = e.response?.data?.error || "That action could not be completed.";
+    }
+    try {
+      await fetchAll();
+    } catch {
+      if (saved) actionError.value = "Saved, but the list could not be refreshed. Reload the page.";
+    }
+  } finally {
+    busy[key] = false;
   }
-  await load();
-  busy[key] = false;
 }
 
 const release = (row) => {

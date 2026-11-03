@@ -249,4 +249,20 @@ describe("UnitOwnerAssignmentsView", () => {
     expect(w.text()).not.toContain("No units yet.");
     expect(w.find(".assign-table").exists()).toBe(false);
   });
+
+  it("keeps the table and says the save went through when the reload after a reassignment fails", async () => {
+    const w = await mountView();
+    await openReassign(w, "12A");
+    await pickOwner(w, "Cara Owner");
+    // the next units.list call is the reload that follows the save
+    units.list.mockRejectedValueOnce({ response: { data: { error: "Units are unavailable" } } });
+    await w.find(".confirm-btn").trigger("click");
+    await flushPromises();
+    expect(units.assignOwner).toHaveBeenCalledWith("u1", { toOwnerId: "o3", reason: null });
+    expect(w.find(".reassign-dialog").exists()).toBe(false);
+    expect(w.findAll(".error")).toHaveLength(1);
+    expect(w.find(".refresh-error").text()).toBe("Saved, but the list could not be refreshed. Reload the page.");
+    expect(w.text()).not.toContain("Units are unavailable");
+    expect(w.findAll(".unit-row")).toHaveLength(2);
+  });
 });

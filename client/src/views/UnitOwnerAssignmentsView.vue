@@ -13,7 +13,8 @@ const route = useRoute();
 const rows = ref([]);
 const ownerList = ref([]);
 const loading = ref(true);
-const loadError = ref("");
+const loadError = ref(""); // the first load failed: nothing to show, so the tables are hidden
+const refreshError = ref(""); // a reload after a SAVED reassignment failed: the tables stay
 
 // Reassign dialog
 const reassigning = ref(null); // the unit row being reassigned
@@ -109,6 +110,7 @@ async function confirmReassign() {
   if (!toOwnerId.value || saving.value) return;
   saving.value = true;
   reassignError.value = "";
+  refreshError.value = "";
   const unitId = reassigning.value.id;
   try {
     await units.assignOwner(unitId, { toOwnerId: toOwnerId.value, reason: reason.value.trim() || null });
@@ -123,8 +125,9 @@ async function confirmReassign() {
     await reload();
     // A history panel already open for this unit now has a new row.
     if (historyUnit.value?.id === unitId) await loadHistory(historyUnit.value);
-  } catch (e) {
-    loadError.value = e.response?.data?.error || "Could not refresh the units.";
+  } catch {
+    // The reassignment is saved; a failed reload must not hide the tables or be reported as a failed save.
+    refreshError.value = "Saved, but the list could not be refreshed. Reload the page.";
   }
 }
 
@@ -159,6 +162,7 @@ async function toggleHistory(row) {
     </header>
 
     <p v-if="loadError" class="error" role="alert">{{ loadError }}</p>
+    <p v-if="refreshError" class="error refresh-error" role="alert">{{ refreshError }}</p>
     <p v-if="loading" class="muted">Loading units…</p>
 
     <template v-else-if="!loadError">

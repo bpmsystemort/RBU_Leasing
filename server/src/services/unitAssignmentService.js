@@ -1,5 +1,6 @@
 import { prisma } from "../lib/prisma.js";
 import { NotFoundError, ConflictError, InvalidReferenceError } from "../lib/errors.js";
+import { UNIT_HIERARCHY_INCLUDE } from "../lib/unitInclude.js";
 
 // Moves a unit to another owner and records who did it. Deliberately touches
 // only Unit.ownerId and the history: User logins, open LeasingTransactions
@@ -32,10 +33,7 @@ export async function reassignOwner(actor, unitId, { toOwnerId, reason }) {
           actorId: actor?.userId ?? null, actorName: who?.name || who?.email || null,
         },
       });
-      return tx.unit.findUnique({
-        where: { id: unitId },
-        include: { tower: { include: { estate: true } }, owner: { select: { id: true, name: true } } },
-      });
+      return tx.unit.findUnique({ where: { id: unitId }, include: UNIT_HIERARCHY_INCLUDE });
     });
   } catch (e) {
     if (e?.code === "P2002") throw new ConflictError(`${target.name} already has a unit with the same unit key`);

@@ -222,6 +222,37 @@ describe("Unblocking a unit", () => {
     const res = await unblock(deal.id);
     expect(res.status).toBe(409);
   });
+
+  it("lets only the deal's own officer or an admin unblock an assigned deal", async () => {
+    const unit = await makeUnit();
+    const deal = await makeDeal(unit.id, { assignedOfficerId: officer.id });
+    await block(deal.id);
+
+    const other = await unblock(deal.id, tokens.officer("someone-else"));
+    expect(other.status).toBe(409);
+    expect(other.body.error).toBe(`Deal ${deal.reference} is assigned to another officer; only they or an admin can release its unit`);
+    const held = await unitOf(unit.id);
+    expect(held.status).toBe("BLOCKED");
+    expect(held.blockedByTransactionId).toBe(deal.id);
+    expect(await messagesOf(deal.id)).not.toContain("Unit block released");
+
+    const own = await unblock(deal.id, tokens.officer(officer.id));
+    expect(own.status).toBe(200);
+    expect((await unitOf(unit.id)).status).toBe("VACANT");
+
+    await block(deal.id);
+    expect((await unblock(deal.id, tokens.admin())).status).toBe(200);
+    expect((await unitOf(unit.id)).status).toBe("VACANT");
+  });
+
+  it("lets any officer unblock an unassigned deal", async () => {
+    const unit = await makeUnit();
+    const deal = await makeDeal(unit.id);
+    await block(deal.id);
+
+    expect((await unblock(deal.id, tokens.officer("someone-else"))).status).toBe(200);
+    expect((await unitOf(unit.id)).status).toBe("VACANT");
+  });
 });
 
 describe("Settling the unit when the deal reaches its outcome", () => {
@@ -433,6 +464,36 @@ describe("Relinking a deal's unit", () => {
     expect(after.status).toBe("BLOCKED");
     expect(after.blockedByTransactionId).toBe(deal.id);
     expect(await messagesOf(deal.id)).not.toContain("Unit block released (linked unit changed)");
+  });
+
+  it("refuses to move a signed deal to another unit, clear its unit or change its lessor (409)", async () => {
+    const owner = await factory.owner();
+    const unitA = await factory.unit(owner.id, { unitNumber: "A1", status: "OCCUPIED" });
+    const unitB = await factory.unit(owner.id, { unitNumber: "B1" });
+    const otherOwner = await factory.owner({ name: "Another Lessor" });
+    const deal = await makeDeal(unitA.id, { stage: "CONTRACT_SIGNING", status: "Signed", finalStatus: "Signed", unitOwnerId: owner.id });
+
+    for (const body of [{ unitId: unitB.id }, { unitId: null }, { unitOwnerId: otherOwner.id }, { unitOwnerId: null }]) {
+      const res = await link(deal.id, body);
+      expect(res.status).toBe(409);
+      expect(res.body.error).toBe("A signed deal cannot be changed");
+    }
+    const after = await prisma.leasingTransaction.findUnique({ where: { id: deal.id } });
+    expect(after.unitId).toBe(unitA.id);
+    expect(after.unitOwnerId).toBe(owner.id);
+    expect((await unitOf(unitA.id)).status).toBe("OCCUPIED");
+    expect((await unitOf(unitB.id)).status).toBe("VACANT");
+  });
+
+  it("still accepts a link to the same unit and lessor on a signed deal", async () => {
+    const owner = await factory.owner();
+    const unit = await factory.unit(owner.id, { status: "OCCUPIED" });
+    const deal = await makeDeal(unit.id, { stage: "CONTRACT_SIGNING", status: "Signed", finalStatus: "Signed", unitOwnerId: owner.id });
+
+    const res = await link(deal.id, { unitId: unit.id, unitOwnerId: owner.id });
+    expect(res.status).toBe(200);
+    expect(res.body.unitId).toBe(unit.id);
+    expect((await unitOf(unit.id)).status).toBe("OCCUPIED");
   });
 
   it("keeps the block when only the tenant is linked", async () => {

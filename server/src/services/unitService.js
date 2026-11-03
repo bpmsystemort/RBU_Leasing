@@ -210,9 +210,9 @@ export async function updateUnit(user, id, data) {
 // Clears the "needs a status decision" flag import v2 raised. Staff's way to
 // say the unit's current status is right; the status itself is never changed.
 export async function markReviewed(user, id) {
-  void user;
   await getUnit(id);
-  return prisma.unit.update({ where: { id }, data: { needsStatusReview: false }, include: withHierarchy });
+  // Same shape the list and detail endpoints give this user (staff also see owner.needsReview).
+  return prisma.unit.update({ where: { id }, data: { needsStatusReview: false }, include: includeFor(user) });
 }
 
 export async function removeUnit(id) {

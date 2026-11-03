@@ -56,7 +56,7 @@ describe("Reassigning a unit to another owner", () => {
       expect(events).toHaveLength(1);
       expect(events[0]).toMatchObject({ actorId: admin.id, actorName: "Real Admin", reason: null });
     } finally {
-      // resetCrudTables keeps every ADMIN, so remove this one explicitly.
+      // Remove the user explicitly (resetCrudTables would also clear a VIEWER) so it never outlives the test.
       await flushAudits();
       await prisma.user.delete({ where: { id: admin.id } });
     }

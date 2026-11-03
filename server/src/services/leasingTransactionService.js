@@ -154,6 +154,14 @@ function isEnded(deal) {
   return FINAL_ENDED.includes(deal?.finalStatus) || isDeadEarly(deal);
 }
 
+// Who may release the unit a LIVE deal is holding: an admin, the deal's own
+// officer, or any officer when the deal is unassigned (an unassigned deal is in
+// every officer's scope, as in listTransactions). The unit-level release and the
+// deal-level unblock both use this one rule.
+function mayReleaseHold(actor, deal) {
+  return actor?.role === "ADMIN" || !deal.assignedOfficerId || deal.assignedOfficerId === actor?.userId;
+}
+
 // A deal with a prospect that has not ended. The lessor-onboarding transaction
 // that ensureForUnit opens has no prospect, so it never counts: only a deal
 // with an inquiry or a tenant can hold or block a unit.
@@ -204,15 +212,17 @@ export async function releaseUnitBlock(actor, unitId) {
       select: { reference: true, stage: true, status: true, finalStatus: true, assignedOfficerId: true },
     });
     const live = holder && !isEnded(holder);
-    if (live && holder.assignedOfficerId && holder.assignedOfficerId !== actor?.userId) {
+    if (live && !mayReleaseHold(actor, holder)) {
       throw new ConflictError(`This unit is held by deal ${holder.reference}; release it from that deal`);
     }
   }
+  // Pinned to the holder we just checked: if the block moved to another deal in
+  // the meantime this writes nothing, instead of freeing someone else's hold.
   const { count } = await prisma.unit.updateMany({
-    where: { id: unitId, status: "BLOCKED" },
+    where: { id: unitId, status: "BLOCKED", blockedByTransactionId: unit.blockedByTransactionId ?? null },
     data: { status: "VACANT", blockedByTransactionId: null },
   });
-  if (count === 0) throw new ConflictError("Unit is not blocked");
+  if (count === 0) throw new ConflictError("The unit's block changed; reload and try again");
   if (unit.blockedByTransactionId) {
     // The unit is already released; a failed audit event must not fail the request.
     try {
@@ -413,6 +423,10 @@ export async function assertNoRivalOnRevival(txn, targetStage, targetStatus) {
 
 export async function unblockUnit(actor, id) {
   const txn = await loadOrThrow(id);
+  // Same rule as the unit-level release; an ended deal has no hold to protect.
+  if (!isEnded(txn) && !mayReleaseHold(actor, txn)) {
+    throw new ConflictError(`Deal ${txn.reference} is assigned to another officer; only they or an admin can release its unit`);
+  }
   if (!(await releaseBlockFor(id))) throw new ConflictError("This deal is not blocking a unit");
   await logEvent(id, actor, "Unit block released", txn.stage);
   return getTransaction(id);
@@ -556,6 +570,13 @@ export async function returnStage(actor, id, { status, remarks } = {}) {
 // Link related records (unit / lessee / lessor) to the transaction.
 export async function linkRecords(actor, id, { unitId, tenantId, unitOwnerId }) {
   const txn = await loadOrThrow(id);
+  // A signed deal made its unit occupied (and SP4 will create the lease): moving
+  // it to another unit or lessor would corrupt both.
+  if (txn.finalStatus === "Signed") {
+    const movesUnit = unitId !== undefined && (unitId || null) !== txn.unitId;
+    const movesOwner = unitOwnerId !== undefined && (unitOwnerId || null) !== txn.unitOwnerId;
+    if (movesUnit || movesOwner) throw new ConflictError("A signed deal cannot be changed");
+  }
   const data = {};
   const notes = [];
   if (unitId !== undefined) {
