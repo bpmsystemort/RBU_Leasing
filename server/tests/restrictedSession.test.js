@@ -13,7 +13,7 @@ async function applicant(status = "PENDING") {
     data: {
       name: "Applicant", email: `applicant.${status}@x.com`, contactEmail: "a@x.com",
       role: "UNIT_OWNER", status, passwordHash: await hashPassword("secret123"),
-      passwordPlain: "secret123", pendingUnit: { unitNumber: "19A" },
+      pendingUnit: { unitNumber: "19A" },
     },
   });
 }

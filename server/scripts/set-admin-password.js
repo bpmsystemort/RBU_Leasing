@@ -13,12 +13,11 @@ if (!pw || pw.length < 8) {
 
 try {
   const passwordHash = await hashPassword(pw);
-  // passwordPlain backs the admin credential list in the Users screen. Updating
-  // only the hash would leave that screen showing the previous password while
-  // login expects the new one.
+  // No readable copy is kept any more, so a stale one from before must not be
+  // left behind either.
   const user = await prisma.user.update({
     where: { email: SUPER_ADMIN_EMAIL },
-    data: { passwordHash, passwordPlain: pw },
+    data: { passwordHash, passwordPlain: null },
   });
   console.log(`Password updated for ${user.email}.`);
 } catch (err) {

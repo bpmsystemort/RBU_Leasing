@@ -120,7 +120,7 @@ const blockers = computed(() => {
               <li v-for="b in blockers" :key="b">{{ b }}</li>
             </ul>
             <div class="actions">
-              <button type="button" class="ghost" :disabled="busy" @click="saveStatus">{{ busy === 'status' ? 'Saving…' : 'Save status' }}</button>
+              <button type="button" class="ghost" :disabled="!!busy" @click="saveStatus">{{ busy === 'status' ? 'Saving…' : 'Save status' }}</button>
               <button type="button" class="ghost warn" :disabled="busy || !prevCfg" @click="sendBack">← Send back<span v-if="prevCfg"> to {{ prevCfg.short }}</span></button>
               <button type="button" class="primary" :disabled="busy || !nextCfg" @click="advance">
                 {{ busy === 'advance' ? 'Advancing…' : nextCfg ? `Advance to ${nextCfg.short} →` : 'Final stage' }}
@@ -157,7 +157,7 @@ const blockers = computed(() => {
               </select>
             </div>
             <div class="actions">
-              <button type="button" class="ghost" :disabled="busy" @click="saveLinks">{{ busy === 'links' ? 'Saving…' : 'Save links' }}</button>
+              <button type="button" class="ghost" :disabled="!!busy" @click="saveLinks">{{ busy === 'links' ? 'Saving…' : 'Save links' }}</button>
             </div>
           </div>
         </div>

@@ -3,7 +3,7 @@ import { mount, flushPromises } from "@vue/test-utils";
 
 vi.mock("../src/lib/resource.js", () => ({
   listUsers: vi.fn(() => Promise.resolve([
-    { id: "u1", name: "Super Admin", email: "admin@rbu.local", role: "ADMIN", password: "admin123", createdAt: "2026-08-01T00:00:00Z" },
+    { id: "u1", name: "Super Admin", email: "admin@rbu.local", role: "ADMIN", createdAt: "2026-08-01T00:00:00Z" },
     { id: "u2", name: "Front Desk", email: "frontdesk", role: "LEASING_OFFICER", password: "pw123456", createdAt: "2026-08-02T00:00:00Z" },
   ])),
   createUser: vi.fn(() => Promise.resolve({ email: "frontdesk", role: "LEASING_OFFICER" })),
@@ -41,19 +41,34 @@ describe("UsersView", () => {
     expect(w.text()).toContain("O-Lease"); // LEASING_OFFICER label
   });
 
-  it("masks passwords and reveals them via the eye toggle", async () => {
+  // The system checks a password; it cannot tell you one. The API no longer
+  // returns it, and the screen must not show one even if a row somehow carries it.
+  it("shows no password column or reveal control, even if a row still carries one", async () => {
     const w = mountView();
     await flushPromises();
-    const firstRow = w.findAll("tbody tr")[0];
-    expect(firstRow.find(".pw__val").text()).toBe("••••••••");
-    expect(firstRow.text()).not.toContain("admin123");
-    const eye = firstRow.find(".pw__eye");
-    expect(eye.attributes("aria-label")).toBe("Show password");
-    await eye.trigger("click");
-    expect(firstRow.find(".pw__val").text()).toBe("admin123");
-    expect(firstRow.find(".pw__eye").attributes("aria-label")).toBe("Hide password");
-    await firstRow.find(".pw__eye").trigger("click");
-    expect(firstRow.find(".pw__val").text()).toBe("••••••••");
+    expect(w.find("thead").text()).not.toContain("Password");
+    expect(w.find(".pw__eye").exists()).toBe(false);
+    expect(w.find(".pw__val").exists()).toBe(false);
+    expect(w.text()).not.toContain("pw123456");
+  });
+
+  it("tells the admin a password cannot be viewed again once saved", async () => {
+    const w = mountView();
+    await flushPromises();
+    await findBtn(w, "New account").trigger("click");
+    expect(w.find(".modal").text()).toContain("cannot be viewed again");
+  });
+
+  // Reset is the replacement for the reveal: an admin who needs to give someone
+  // access sets a new password, and says so on the form.
+  it("labels the password field as a reset when editing a login", async () => {
+    const w = mountView();
+    await flushPromises();
+    const editButtons = w.findAll("button").filter((b) => b.text() === "Edit");
+    await editButtons[1].trigger("click");
+    const label = w.find('label[for="password"]').text();
+    expect(label).toContain("New password");
+    expect(label).toContain("leave blank to keep");
   });
 
   it("offers exactly the four roles in the dropdown", async () => {
@@ -88,6 +103,23 @@ describe("UsersView", () => {
     await w.find("form").trigger("submit.prevent");
     await flushPromises();
     expect(updateUser).toHaveBeenCalledWith("u2", { name: "Reception", email: "frontdesk", role: "LEASING_OFFICER" });
+  });
+
+  // Reset is how access is recovered now, so a rejected password must say why
+  // instead of the bare "Validation failed" the server's envelope carries.
+  it("shows why a reset password was rejected, not just that validation failed", async () => {
+    updateUser.mockRejectedValueOnce({ response: { status: 400, data: {
+      error: "Validation failed",
+      details: [{ path: "password", message: "Password must be at least 6 characters" }],
+    } } });
+    const w = mountView();
+    await flushPromises();
+    const editButtons = w.findAll("button").filter((b) => b.text() === "Edit");
+    await editButtons[1].trigger("click");
+    await w.find("#password").setValue("abc12");
+    await w.find("form").trigger("submit.prevent");
+    await flushPromises();
+    expect(w.find(".modal .error").text()).toBe("Password must be at least 6 characters");
   });
 
   it("deletes a login after confirmation", async () => {

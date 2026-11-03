@@ -117,8 +117,16 @@ const dashCruz = await get("/dashboard/executive", cruz);
 const dashAdmin = await get("/dashboard/executive", adminTok);
 check("officer dashboard is scoped to their assigned owner", dashCruz.all.length, 5);
 check("admin dashboard sees the whole portfolio", dashAdmin.all.length, 8);
-check("dashboard sees both leases", dashAdmin.leased.length, 2);
-check("near-expiry bucket is populated", dashAdmin.summary.buckets.within30, 1);
+// The expected counts come from the lease data itself, by the dashboard's own
+// rule (a lease counts while it has not ended and is not terminated). Fixed
+// numbers were true only on the day the demo data was seeded, and fail as the
+// calendar moves past its lease dates — which says nothing about the dashboard.
+const leaseRows = await get("/leases", adminTok);
+const nowMs = Date.now();
+const running = leaseRows.filter((l) => new Date(l.endDate).getTime() >= nowMs && l.status !== "TERMINATED");
+const endingSoon = running.filter((l) => (new Date(l.endDate).getTime() - nowMs) / 86400000 <= 30);
+check("dashboard counts every lease still running", dashAdmin.leased.length, new Set(running.map((l) => l.unitId)).size);
+check("near-expiry bucket matches the leases ending within 30 days", dashAdmin.summary.buckets.within30, new Set(endingSoon.map((l) => l.unitId)).size);
 log(`   occupancy ${dashAdmin.summary.occupancyRate}% · monthly active rent PHP ${Number(dashAdmin.summary.monthlyActiveRent).toLocaleString("en-PH")}`);
 
 // ─────────────────────────────────────────────────────────────────── viewer

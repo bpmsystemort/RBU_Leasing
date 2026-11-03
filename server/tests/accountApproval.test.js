@@ -202,7 +202,7 @@ describe("Approving an account", () => {
     const user = await prisma.user.create({
       data: {
         name: "Pending Lessor", email: "pending.lessor@x.com", contactEmail: "pending.lessor@x.com",
-        role: "UNIT_OWNER", status: "PENDING", passwordHash: "x", passwordPlain: "x",
+        role: "UNIT_OWNER", status: "PENDING", passwordHash: "x",
         pendingUnit: { estateId: estate.id, towerId: tower.id, unitNumber: "19A", floor: "19", type: "1 Bedroom", baseRent: 25000 },
       },
     });
@@ -229,7 +229,7 @@ describe("Approving an account", () => {
     const user = await prisma.user.create({
       data: {
         name: "Pending Lessor", email: "pending.lessor@x.com", contactEmail: "pending.lessor@x.com",
-        role: "UNIT_OWNER", status: "PENDING", passwordHash: "x", passwordPlain: "x",
+        role: "UNIT_OWNER", status: "PENDING", passwordHash: "x",
         pendingUnit: { unitNumber: "19A" },
       },
     });
@@ -244,7 +244,7 @@ describe("Approving an account", () => {
     const user = await prisma.user.create({
       data: {
         name: "Pending Lessor", email: "pending.lessor@x.com", contactEmail: "pending.lessor@x.com",
-        role: "UNIT_OWNER", status: "PENDING", passwordHash: "x", passwordPlain: "x",
+        role: "UNIT_OWNER", status: "PENDING", passwordHash: "x",
         pendingUnit: { unitNumber: "19A", towerId: "deleted-tower-id" },
       },
     });
@@ -260,7 +260,7 @@ describe("Approving an account", () => {
     const user = await prisma.user.create({
       data: {
         name: "Pending Lessor", email: "pending.lessor@x.com", contactEmail: "pending.lessor@x.com",
-        role: "UNIT_OWNER", status: "PENDING", passwordHash: "x", passwordPlain: "x",
+        role: "UNIT_OWNER", status: "PENDING", passwordHash: "x",
       },
     });
     await request(app).patch(`/api/auth/pending/${user.id}/approve`).set("Authorization", `Bearer ${tokens.admin()}`);
@@ -273,7 +273,7 @@ describe("Approving an account", () => {
     const user = await prisma.user.create({
       data: {
         name: "Pending Lessor", email: "pending.lessor@x.com", contactEmail: "pending.lessor@x.com",
-        role: "UNIT_OWNER", status: "PENDING", passwordHash: "x", passwordPlain: "x",
+        role: "UNIT_OWNER", status: "PENDING", passwordHash: "x",
         pendingUnit: { unitNumber: "19A" },
       },
     });
@@ -336,7 +336,7 @@ describe("Approval materialises a reviewed unit", () => {
     const user = await prisma.user.create({
       data: {
         name: "No Unit", email: "nounit@x.com", contactEmail: "nounit@x.com",
-        role: "UNIT_OWNER", status: "PENDING", passwordHash: "x", passwordPlain: "x",
+        role: "UNIT_OWNER", status: "PENDING", passwordHash: "x",
       },
     });
     const res = await request(app).patch(`/api/auth/pending/${user.id}/approve`)

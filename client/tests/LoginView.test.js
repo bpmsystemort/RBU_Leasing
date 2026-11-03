@@ -112,3 +112,32 @@ describe("LoginView — where sign-in lands you", () => {
     expect(router.currentRoute.value.path).toBe("/app/my-units");
   });
 });
+
+describe("LoginView — when sign-in is refused", () => {
+  beforeEach(() => setActivePinia(createPinia()));
+
+  async function submitWith(rejection) {
+    const { api } = await import("../src/lib/api.js");
+    api.post.mockRejectedValueOnce(rejection);
+    const { wrapper: w } = await mountLoginWithRouter();
+    await w.find("#username").setValue("jane");
+    await w.find("#password").setValue("secret12345");
+    await w.find("form").trigger("submit.prevent");
+    await flushPromises();
+    return w;
+  }
+
+  // Too many failed attempts answers 429 before the password is even checked, so
+  // a correct password is refused too. Saying "we couldn't find an account" then
+  // sends the person round in circles; they need to be told to wait.
+  it("tells a throttled person to wait, not that their account was not found", async () => {
+    const w = await submitWith({ response: { status: 429, data: { error: "Too many failed sign-in attempts. Please wait a few minutes and try again." } } });
+    expect(w.text()).toContain("Too many failed sign-in attempts");
+    expect(w.text()).not.toContain("couldn't find an account");
+  });
+
+  it("still says the account was not found when the credentials are wrong", async () => {
+    const w = await submitWith({ response: { status: 401, data: { error: "Invalid credentials" } } });
+    expect(w.text()).toContain("couldn't find an account");
+  });
+});

@@ -28,9 +28,17 @@ async function submit() {
       ? "/app/application"
       : auth.isOwner ? "/app/my-units" : auth.isTenant ? "/app/my-lease" : "/app";
     router.push(home);
-  } catch {
-    // Every account that exists can now sign in, whatever its status, so the
-    // only way to land here is credentials that do not match.
+  } catch (e) {
+    // Too many failed attempts is refused with 429 before the password is even
+    // checked, so a correct password is refused too. Say so, with the server's
+    // own wording — "we couldn't find an account" would send someone round in
+    // circles retyping a password that was fine.
+    if (e?.response?.status === 429 && e.response.data?.error) {
+      error.value = e.response.data.error;
+      return;
+    }
+    // Every account that exists can now sign in, whatever its status, so
+    // otherwise the credentials simply do not match.
     error.value = "We couldn't find an account with those details. Check your username and password, or create an account below if you don't have one yet.";
   }
 }

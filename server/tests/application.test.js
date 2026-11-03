@@ -13,7 +13,7 @@ async function applicantToken(status, rejectionReason = null) {
     data: {
       name: "Applicant", email: `app.${status}@x.com`, contactEmail: "a@x.com",
       role: "UNIT_OWNER", status, rejectionReason,
-      passwordHash: await hashPassword("secret123"), passwordPlain: "secret123",
+      passwordHash: await hashPassword("secret123"),
       pendingUnit: { unitNumber: "19A", floor: "19" },
     },
   });
@@ -110,7 +110,7 @@ describe("Resubmitting without a unit", () => {
       data: {
         name: "Lessee Applicant", email: "lessee.applicant@x.com", contactEmail: "lessee@x.com",
         role: "TENANT", status, rejectionReason,
-        passwordHash: await hashPassword("secret123"), passwordPlain: "secret123",
+        passwordHash: await hashPassword("secret123"),
         // A tenant application never carries a unit at all.
       },
     });
@@ -137,7 +137,7 @@ describe("Resubmitting without a unit", () => {
       data: {
         name: "Lessor Applicant", email: "lessor.applicant@x.com", contactEmail: "lessor@x.com",
         role: "UNIT_OWNER", status: "FOR_REVISION", rejectionReason: "wrong floor",
-        passwordHash: await hashPassword("secret123"), passwordPlain: "secret123",
+        passwordHash: await hashPassword("secret123"),
         pendingUnit: { unitNumber: "19A", floor: "19" },
       },
     });
@@ -157,7 +157,7 @@ describe("Resubmitting without a unit", () => {
       data: {
         name: "No Unit Lessor", email: "no.unit.lessor@x.com", contactEmail: "nounit@x.com",
         role: "UNIT_OWNER", status: "FOR_REVISION", rejectionReason: "please add details",
-        passwordHash: await hashPassword("secret123"), passwordPlain: "secret123",
+        passwordHash: await hashPassword("secret123"),
         // Skipped the unit step entirely, like the old account-first path allowed.
       },
     });

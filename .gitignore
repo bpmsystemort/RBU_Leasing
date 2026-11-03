@@ -16,6 +16,16 @@ server/data/
 # operational provisioning scripts (real credentials/PII — keep out of the repo)
 server/scripts/create-*.js
 
-# Database dumps — contain the passwordPlain column for every user.
+# Database dumps — dumps taken before 27 Oct 2026 hold a readable password for every user.
 # This repository is public; these must never be committed.
 backups/
+
+# Spreadsheets hold real names and contact details (the lease workbook, exports).
+# This repository is public; tests build small synthetic workbooks in code instead.
+*.xlsx
+*.xls
+*.xlsm
+
+# Demo walkthrough documents contain the demo login table; keep them out of the public repo.
+docs/RBU-Leasing-Walkthrough.docx
+docs/role-playbook.html

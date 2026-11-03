@@ -53,7 +53,50 @@ async function mountWith(over) {
 }
 
 describe("TransactionDetailView", () => {
-  beforeEach(() => { leasingTransactions.get.mockClear(); leasingTransactions.advance.mockClear(); });
+  beforeEach(() => {
+    leasingTransactions.get.mockClear(); leasingTransactions.advance.mockClear();
+    leasingTransactions.setStatus.mockClear(); leasingTransactions.link.mockClear();
+  });
+
+  // `busy` is a string ("" at rest). Vue treats "" as TRUE for a boolean attribute,
+  // so a bare :disabled="busy" left these two buttons permanently greyed out and
+  // no Lessee could ever be linked to a deal on screen.
+  const button = (w, label) => w.findAll("button").find((b) => b.text() === label);
+
+  it("leaves Save status and Save links usable when nothing is running", async () => {
+    const w = await mountWith({});
+    expect(button(w, "Save status").attributes("disabled")).toBeUndefined();
+    expect(button(w, "Save links").attributes("disabled")).toBeUndefined();
+    expect(button(w, "Save status").element.disabled).toBe(false);
+    expect(button(w, "Save links").element.disabled).toBe(false);
+  });
+
+  it("saves the links when Save links is pressed", async () => {
+    const w = await mountWith({});
+    await button(w, "Save links").trigger("click");
+    await flushPromises();
+    expect(leasingTransactions.link).toHaveBeenCalledWith("t1", { unitId: null, tenantId: null, unitOwnerId: null });
+  });
+
+  it("saves the status when Save status is pressed", async () => {
+    const w = await mountWith({});
+    await button(w, "Save status").trigger("click");
+    await flushPromises();
+    expect(leasingTransactions.setStatus).toHaveBeenCalledWith("t1", { status: "Pending", remarks: "" });
+  });
+
+  it("locks every action button while one request is running, then frees them", async () => {
+    let finish;
+    leasingTransactions.advance.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    const w = await mountWith({});
+    await w.findAll("button").find((b) => b.text().includes("Advance to")).trigger("click");
+    expect(button(w, "Save links").element.disabled).toBe(true);
+    expect(button(w, "Save status").element.disabled).toBe(true);
+    finish({ ...baseTxn, stage: "APPROVAL", status: "Pending Submission", stageData: { ...baseTxn.stageData, APPROVAL: { status: "Pending Submission" } } });
+    await flushPromises();
+    expect(button(w, "Save links").element.disabled).toBe(false);
+    expect(button(w, "Save status").element.disabled).toBe(false);
+  });
 
   it("renders the tracker, reference, current stage and activity", async () => {
     const w = await mountView();

@@ -73,7 +73,7 @@ model User {
   name         String
   email        String     @unique
   passwordHash String
-  passwordPlain String?   // recoverable copy for the admin credential list (internal tool)
+  passwordPlain String?   // DEPRECATED: no longer written or read; always null. Column kept so backups stay valid; dropping it is a separate decision.
   role         Role       @default(VIEWER)
   // Defaults to APPROVED so existing accounts and admin-created staff logins
   // are unaffected; only the signup route sets PENDING.

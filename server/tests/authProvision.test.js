@@ -59,25 +59,25 @@ describe("admin provisions owner/tenant accounts", () => {
     expect(res.body).toHaveLength(0);
   });
 
-  it("lists credentials for an admin (plain password, no hash)", async () => {
+  it("lists accounts for an admin, with no password of any kind", async () => {
     await request(app).post("/api/auth/register")
       .set("Authorization", `Bearer ${tokens.admin()}`)
       .send({ name: "Front Desk", email: "frontdesk", password: "pw123456", role: "VIEWER" });
     const res = await request(app).get("/api/auth/users").set("Authorization", `Bearer ${tokens.admin()}`);
     expect(res.status).toBe(200);
     const created = res.body.find((u) => u.email === "frontdesk");
-    expect(created).toMatchObject({ name: "Front Desk", role: "VIEWER", password: "pw123456" });
-    expect(created.passwordHash).toBeUndefined();
+    expect(created).toMatchObject({ name: "Front Desk", role: "VIEWER" });
+    for (const key of ["password", "passwordPlain", "passwordHash"]) expect(created[key]).toBeUndefined();
   });
 
-  it("updates the stored password when it is reset", async () => {
+  it("a reset password takes effect at sign-in", async () => {
     const u = await request(app).post("/api/auth/register")
       .set("Authorization", `Bearer ${tokens.admin()}`)
       .send({ name: "Front Desk", email: "frontdesk", password: "pw123456", role: "VIEWER" });
     await request(app).patch(`/api/auth/users/${u.body.id}`)
       .set("Authorization", `Bearer ${tokens.admin()}`).send({ password: "newpass123" });
-    const res = await request(app).get("/api/auth/users").set("Authorization", `Bearer ${tokens.admin()}`);
-    expect(res.body.find((x) => x.id === u.body.id).password).toBe("newpass123");
+    const res = await request(app).post("/api/auth/login").send({ email: "frontdesk", password: "newpass123" });
+    expect(res.status).toBe(200);
   });
 
   it("a viewer cannot list credentials (403)", async () => {
@@ -108,6 +108,17 @@ describe("admin provisions owner/tenant accounts", () => {
       .send({ password: "newpass123" });
     const login = await request(app).post("/api/auth/login").send({ email: "frontdesk", password: "newpass123" });
     expect(login.status).toBe(200);
+  });
+
+  // A reset is now the only way to recover access, so a too-short password has to
+  // say why — "Validation failed" alone leaves the admin guessing.
+  it("says how short a rejected password is, not just that validation failed", async () => {
+    const u = await createLogin();
+    const res = await request(app).patch(`/api/auth/users/${u.id}`)
+      .set("Authorization", `Bearer ${tokens.admin()}`)
+      .send({ password: "abc12" });
+    expect(res.status).toBe(400);
+    expect(res.body.details[0]).toMatchObject({ path: "password", message: "Password must be at least 6 characters" });
   });
 
   it("deletes a login", async () => {

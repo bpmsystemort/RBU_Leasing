@@ -49,7 +49,9 @@ export async function acceptInvite(token, password) {
       }
       const user = await tx.user.create({ data: {
         name: invite.unitOwner.name, email: invite.email, contactEmail: invite.email,
-        passwordHash: await hashPassword(password), passwordPlain: password,
+        // Store only the hash — the security line removed readable-password
+        // storage everywhere; the owner-invite accept must not reintroduce it.
+        passwordHash: await hashPassword(password),
         role: "UNIT_OWNER", status: "APPROVED", unitOwnerId: invite.unitOwnerId,
       } });
       await tx.unitOwner.update({ where: { id: invite.unitOwnerId }, data: { email: invite.email } });

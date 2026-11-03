@@ -36,7 +36,7 @@ export function issueToken({ id, role, unitOwnerId = null, tenantId = null, stat
 export async function registerUser({ name, email, password, role, unitOwnerId, tenantId }) {
   const finalRole = role || "VIEWER";
   const data = {
-    name, email, passwordHash: await hashPassword(password), passwordPlain: password, role: finalRole,
+    name, email, passwordHash: await hashPassword(password), role: finalRole,
   };
 
   // The owner/tenant link is optional — a plain login can be created with just a
@@ -69,12 +69,16 @@ export async function listUsers() {
     where: { status: { in: ["APPROVED", "SUSPENDED"] } },
     orderBy: { createdAt: "desc" },
     select: {
-      id: true, name: true, email: true, role: true, status: true, passwordPlain: true,
+      // `status` kept for the suspend/restore UI (owner-accounts work); but NOT
+      // `passwordPlain` — the security line stopped exposing readable passwords
+      // ("honest reset" instead of reveal), and that fix is preserved here.
+      id: true, name: true, email: true, role: true, status: true,
       unitOwnerId: true, tenantId: true, createdAt: true,
     },
   });
-  // Expose the recoverable password as `password`; never the hash.
-  return users.map(({ passwordPlain, ...u }) => ({ ...u, password: passwordPlain ?? null }));
+  // No password of any kind: the system checks a password, it cannot tell you
+  // one. An admin who needs to give someone access sets a new one (updateUser).
+  return users;
 }
 
 export async function updateUser(id, { name, email, password, role }) {
@@ -94,7 +98,9 @@ export async function updateUser(id, { name, email, password, role }) {
   if (role !== undefined) data.role = role;
   if (password) {
     data.passwordHash = await hashPassword(password);
-    data.passwordPlain = password;
+    // A readable copy from before is wrong the moment the password changes and
+    // still exposes the old one — clear it rather than leave it behind.
+    data.passwordPlain = null;
   }
 
   const updated = await prisma.user.update({ where: { id }, data });
@@ -173,7 +179,7 @@ export async function signupPortalUser({ name, email, contactEmail, password, ro
   const user = await prisma.user.create({
     data: {
       name, email, contactEmail, role,
-      passwordHash: await hashPassword(password), passwordPlain: password,
+      passwordHash: await hashPassword(password),
       status: "PENDING",
       pendingUnit,
     },

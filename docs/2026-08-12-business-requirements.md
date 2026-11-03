@@ -136,9 +136,9 @@ consolidated admin view of all records.
 
 - **G-1 Session persistence.** Login state is held in memory only; refreshing the browser
   logs the user out. Recommended for hardening.
-- **G-2 Plaintext password storage.** The system currently stores a recoverable plaintext
-  copy of user passwords to power an admin "reveal password" feature. This is a security
-  risk and should be reviewed — recommend removing in favor of admin-initiated resets.
+- **G-2 Plaintext password storage — resolved 27 Oct 2026.** The system no longer stores a
+  recoverable copy of any password; the admin "reveal password" feature is replaced by an
+  admin-initiated reset.
 - **G-3 SharePoint/PDF import (deferred).** A requested workflow to retrieve filled owner/
   tenant PDF forms from SharePoint and load new records is not built. No SharePoint
   connector is currently available; import utilities exist but there is no import UI/route.

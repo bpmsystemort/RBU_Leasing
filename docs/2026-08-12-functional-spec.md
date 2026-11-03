@@ -51,7 +51,7 @@ deleted.
 ### Entities
 
 **User** — id, name, email (unique, used as username), passwordHash, passwordPlain
-(recoverable copy — see §11 gap), role (default VIEWER), optional link to a UnitOwner and/or
+(deprecated: no longer written or read, always null — see §11), role (default VIEWER), optional link to a UnitOwner and/or
 Tenant, timestamps.
 
 **Estate** — id, name (unique), has many Towers.
@@ -168,8 +168,8 @@ All return `.xlsx` (bold header row):
 - **Admin back office:** a tabbed view consolidating Approvals, Requirements, Owners, Units,
   Tenants, Leases, Payments (and Users for ADMIN).
 - **User management (ADMIN):** list users, create accounts (assign role, optionally link to
-  an owner/tenant), edit (name/email/password/role), delete. The UI can reveal stored
-  plaintext passwords (see §11). Super Admin row is protected.
+  an owner/tenant), edit (name/email/password/role), delete. Passwords cannot be viewed: an admin who
+  needs to give someone access sets a new one (see §11). Super Admin row is protected.
 
 ## 5. API Endpoints (summary)
 
@@ -259,8 +259,9 @@ import/tower-map utilities.
 ## 11. Known Gaps (carried from BRD §10)
 
 - **Session persistence:** in-memory only; refresh logs out. *Recommended fix.*
-- **Plaintext passwords:** `User.passwordPlain` stores recoverable passwords to power an
-  admin reveal feature — a security risk. *Recommend removing in favor of admin resets.*
+- **Plaintext passwords — resolved 27 Oct 2026:** the system no longer stores or returns a
+  readable password; the admin reveal is replaced by an admin reset. The `passwordPlain`
+  column remains (always null) so older backups stay valid; dropping it is a separate decision.
 - **SharePoint/PDF import:** not implemented; no connector available. Import utilities
   (`importClean`, `towerMap`) exist but there is no import route or UI. *Deferred.*
 - **Legacy `building` field:** redundant with the tower relation; consolidate.

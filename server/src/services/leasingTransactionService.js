@@ -415,7 +415,15 @@ const DOC_SELECT = {
   docType: true, uploadedByName: true, createdAt: true,
 };
 
+// The read-only staff role must not change a transaction's documents. This lives
+// in the service rather than as route middleware because the same routes are open
+// to the linked tenant and owner for loose attachments — only VIEWER is excluded.
+function assertCanChangeDocuments(actor) {
+  if (actor?.role === "VIEWER") throw new ForbiddenError("Read-only accounts cannot change documents");
+}
+
 export async function addDocument(actor, id, file, docType = null) {
+  assertCanChangeDocuments(actor);
   const txn = await assertCanAccess(actor, id);
   if (docType && !TRANSACTION_DOCUMENT_KEYS.includes(docType)) {
     throw new InvalidReferenceError("Unknown document type");
@@ -477,6 +485,7 @@ export async function getDocumentForDownload(user, id, docId) {
 }
 
 export async function deleteDocument(user, id, docId) {
+  assertCanChangeDocuments(user);
   await assertCanAccess(user, id);
   const doc = await prisma.transactionDocument.findUnique({ where: { id: docId } });
   if (!doc || doc.transactionId !== id) throw new NotFoundError("Document not found");

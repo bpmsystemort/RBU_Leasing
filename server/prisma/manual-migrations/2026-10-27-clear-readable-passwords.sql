@@ -1,0 +1,13 @@
+-- The application no longer writes or reads User."passwordPlain": a password is
+-- something the system checks, not something it can tell you. This clears the
+-- readable copies stored before that change, so a database dump taken AFTER this
+-- runs no longer holds anyone's real password. Dumps taken before it still do.
+--
+-- Run it on every database, and run it again after the service has been restarted
+-- on the new code: until the restart, the old code keeps writing a readable copy
+-- for any account created or reset in the meantime.
+--
+-- The column itself is kept, so existing backups and the schema stay valid;
+-- dropping it is a separate decision. Idempotent: a second run finds nothing to
+-- clear. Plain SQL — no DO block, which cannot run on the office machine.
+UPDATE "User" SET "passwordPlain" = NULL WHERE "passwordPlain" IS NOT NULL;
