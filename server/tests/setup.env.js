@@ -25,3 +25,8 @@ if (!/rbu_leasing_test/.test(process.env.DATABASE_URL || "")) {
 
 // Isolate the info-sheet mapper's saved layouts/templates away from real data.
 process.env.INFO_SHEET_DATA_DIR = path.join(os.tmpdir(), "rbu-info-sheet-test-data");
+
+// Never let the test suite open a real SMTP connection or send an email, even
+// when server/.env has MAIL_* configured for Dev — unsetting MAIL_HOST forces
+// the mailer's no-send fallback ({ delivered:false }) for every test.
+delete process.env.MAIL_HOST;

@@ -8,6 +8,7 @@ import UnitDetailPublicView from "../views/UnitDetailPublicView.vue";
 import LoginView from "../views/LoginView.vue";
 import SignupView from "../views/SignupView.vue";
 import RegisterUnitPublicView from "../views/RegisterUnitPublicView.vue";
+import AcceptInviteView from "../views/AcceptInviteView.vue";
 import ExecutiveDashboardView from "../views/ExecutiveDashboardView.vue";
 import DashboardMetricView from "../views/DashboardMetricView.vue";
 import BrowseUnitsView from "../views/BrowseUnitsView.vue";
@@ -32,6 +33,8 @@ import LesseeInfoSheetsView from "../views/LesseeInfoSheetsView.vue";
 import MyLessorRequirementsView from "../views/MyLessorRequirementsView.vue";
 import LessorProfileView from "../views/LessorProfileView.vue";
 import ApplicationStatusView from "../views/ApplicationStatusView.vue";
+import PortfolioImportView from "../views/PortfolioImportView.vue";
+import EmailSettingsView from "../views/EmailSettingsView.vue";
 // Lazy-loaded: pull in the PDF.js live preview, keeping it out of the main bundle.
 const OwnerInfoSheetView = () => import("../views/OwnerInfoSheetView.vue");
 const TenantInfoSheetView = () => import("../views/TenantInfoSheetView.vue");
@@ -67,6 +70,7 @@ const routes = [
     beforeEnter: (to) => (to.query.as === "LESSOR" ? "/register-unit" : true),
   }, // public self-registration (lessee); lessor entry redirects to the unit-first wizard
   { path: "/register-unit", component: RegisterUnitPublicView, meta: { ownsThemeToggle: true } }, // public lessor wizard: unit first, then account
+  { path: "/accept-invite", component: AcceptInviteView, meta: { ownsThemeToggle: true } }, // public: owner sets a password from an invite link
   {
     path: "/app",
     component: AppLayout,
@@ -120,6 +124,8 @@ const routes = [
       { path: "account-approvals", component: AccountApprovalsView, meta: { roles: ["ADMIN", "LEASING_OFFICER"] } },
       { path: "users", component: UsersView, meta: { roles: ["ADMIN"] } },
       { path: "audit", component: AuditView, meta: { roles: ["ADMIN"] } },
+      { path: "import", component: PortfolioImportView, meta: { roles: ["ADMIN"] } },
+      { path: "email-settings", component: EmailSettingsView, meta: { roles: ["ADMIN"] } },
       { path: "content", component: ContentManagerView, meta: { roles: WRITE } },
       { path: "content/listings", component: ListingsManagerView, meta: { roles: WRITE } },
       { path: "forms", component: CmsFormsView, meta: { roles: ["ADMIN"] } },

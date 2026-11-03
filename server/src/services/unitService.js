@@ -14,7 +14,7 @@ async function assertTowerExists(towerId) {
   if (!tower) throw new InvalidReferenceError("towerId does not reference an existing tower");
 }
 
-export function listUnits({ ownerId, status, estateId, towerId, approvalStatus, assignedOfficerId } = {}) {
+export function listUnits({ ownerId, status, estateId, towerId, approvalStatus, assignedOfficerId, needsStatusReview } = {}) {
   const where = {};
   if (ownerId) where.ownerId = ownerId;
   if (status) where.status = status;
@@ -22,6 +22,10 @@ export function listUnits({ ownerId, status, estateId, towerId, approvalStatus, 
   if (estateId) where.tower = { estateId };
   if (approvalStatus) where.approvalStatus = approvalStatus;
   if (assignedOfficerId) where.owner = { assignedOfficerId };
+  // Import v2 leaves a unit's status as-is (never auto-VACANT) when all its
+  // leases have ended, flagging it here instead — this lets staff pull up
+  // just the rows that need a manual status decision.
+  if (needsStatusReview === "true" || needsStatusReview === true) where.needsStatusReview = true;
   return prisma.unit.findMany({ where, include: withHierarchy, orderBy: { createdAt: "desc" } });
 }
 

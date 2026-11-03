@@ -4,6 +4,7 @@ import { RouterLink, RouterView, useRoute, useRouter } from "vue-router";
 import { useAuthStore } from "../stores/auth.js";
 import { useActionCenter } from "../stores/actionCenter.js";
 import { roleLabel } from "../lib/formatters.js";
+import { visibleNav, navItems } from "../lib/nav.js";
 import AppIcon from "./AppIcon.vue";
 import ThemeToggle from "./ThemeToggle.vue";
 import PageFormPanel from "./PageFormPanel.vue";
@@ -44,52 +45,36 @@ const isNarrow = typeof window !== "undefined" && window.matchMedia
 const sidebarOpen = ref(!isNarrow);
 const menuOpen = ref(false);
 
-// Grouped navigation. `admin` = Super Admin only, `write` = write staff.
-const STAFF_GROUPS = [
-  { label: "Workspace", items: [
-    { to: "/app", label: "Dashboard", icon: "grid" },
-    { to: "/app/inquiries", label: "Inquiries", icon: "message" },
-    { to: "/app/transactions", label: "Leasing Tracker", icon: "activity" },
-    { to: "/app/owners", label: "Owners", icon: "users" },
-    { to: "/app/units", label: "Units", icon: "building" },
-    { to: "/app/tenants", label: "Tenants", icon: "user" },
-    { to: "/app/leases", label: "Leases", icon: "file" },
-    { to: "/app/approvals", label: "Approvals", icon: "check", write: true },
-    { to: "/app/lessor-sheets", label: "Lessor Sheets", icon: "clipboard", write: true },
-    { to: "/app/lessee-sheets", label: "Lessee Sheets", icon: "clipboard", write: true },
-    { to: "/app/requirements", label: "Requirements", icon: "folder", write: true },
-  ] },
-  { label: "Administration", items: [
-    { to: "/app/account-approvals", label: "Account Approvals", icon: "shield", write: true },
-    { to: "/app/content", label: "Content Manager", icon: "columns", write: true },
-    { to: "/app/users", label: "System Users", icon: "shield", admin: true },
-    { to: "/app/audit", label: "Audit Trail", icon: "list", admin: true },
-  ] },
-];
-const OWNER_GROUPS = [{ label: null, items: [
-  { to: "/app/my-units", label: "My Units", icon: "building" },
-  { to: "/app/leasing-progress", label: "Leasing Progress", icon: "activity" },
-  { to: "/app/info-sheet", label: "Acceptance Form", icon: "clipboard" },
-  { to: "/app/lessor-requirements", label: "Requirements", icon: "folder" },
-  { to: "/app/my-leases", label: "My Leases", icon: "file" },
-  { to: "/app/my-profile", label: "My Profile", icon: "user" },
-] }];
-const TENANT_GROUPS = [{ label: null, items: [
-  { to: "/app/my-lease", label: "My Lease", icon: "file" },
-  { to: "/app/browse-units", label: "Available Units", icon: "building" },
-  { to: "/app/leasing-progress", label: "Leasing Progress", icon: "activity" },
-  { to: "/app/info-sheet-tenant", label: "Acceptance Form", icon: "clipboard" },
-  { to: "/app/requirements", label: "Requirements", icon: "folder" },
-  { to: "/app/my-profile", label: "My Profile", icon: "user" },
-] }];
+const groups = computed(() => visibleNav(auth.role, auth.canWrite));
+const allItems = computed(() => navItems(groups.value));
 
-const groups = computed(() => {
-  const base = auth.isOwner ? OWNER_GROUPS : auth.isTenant ? TENANT_GROUPS : STAFF_GROUPS;
-  return base
-    .map((g) => ({ label: g.label, items: g.items.filter((i) => (i.admin ? auth.role === "ADMIN" : i.write ? auth.canWrite : true)) }))
-    .filter((g) => g.items.length);
-});
-const allItems = computed(() => groups.value.flatMap((g) => g.items));
+// --- Collapsible groups (persisted per viewer) ---
+const COLLAPSE_KEY = "rbu.nav.collapsedGroups";
+function loadCollapsed() {
+  try { return new Set(JSON.parse(localStorage.getItem(COLLAPSE_KEY) || "[]")); }
+  catch { return new Set(); }
+}
+const collapsedGroups = ref(loadCollapsed());
+function persistCollapsed() {
+  try { localStorage.setItem(COLLAPSE_KEY, JSON.stringify([...collapsedGroups.value])); }
+  catch { /* storage unavailable — collapse is per-session only */ }
+}
+function groupHasActive(group) {
+  return group.sections.some((s) => s.items.some((i) => isActive(i.to)));
+}
+function isCollapsed(group) {
+  if (!sidebarOpen.value || !group.label) return false; // icon-rail & portals never collapse
+  if (groupHasActive(group)) return false;              // the active group stays open
+  return collapsedGroups.value.has(group.label);
+}
+function toggleGroup(label) {
+  if (!label) return;
+  const next = new Set(collapsedGroups.value);
+  next.has(label) ? next.delete(label) : next.add(label);
+  collapsedGroups.value = next;
+  persistCollapsed();
+}
+const currentGroup = computed(() => groups.value.find(groupHasActive)?.label || "");
 
 function isActive(to) {
   return to === "/app" ? route.path === "/app" : route.path.startsWith(to);
@@ -156,22 +141,35 @@ function logout() {
       </div>
 
       <nav class="sidebar__nav">
-        <div v-for="(g, gi) in groups" :key="gi" class="navgroup">
-          <p v-if="g.label && sidebarOpen" class="navgroup__label">{{ g.label }}</p>
-          <div v-else-if="g.label && gi > 0" class="navgroup__rule"></div>
-          <RouterLink
-            v-for="l in g.items" :key="l.to" :to="l.to"
-            class="navlink" :class="{ active: isActive(l.to) }"
-            :title="!sidebarOpen ? l.label : undefined" @click="onNav"
+        <div v-for="(g, gi) in groups" :key="g.label ?? gi" class="navgroup">
+          <button
+            v-if="g.label && sidebarOpen"
+            type="button" class="navgroup__toggle"
+            :aria-expanded="!isCollapsed(g)"
+            @click="toggleGroup(g.label)"
           >
-            <span class="navlink__icon"><AppIcon :name="l.icon" :size="18" /></span>
-            <span v-if="sidebarOpen" class="navlink__label">{{ l.label }}</span>
-            <span
-              v-if="canAct && pendingFor(l.to) > 0"
-              class="navlink__badge"
-              :title="`${pendingFor(l.to)} awaiting action`"
-            >{{ badge(pendingFor(l.to)) }}</span>
-          </RouterLink>
+            <span class="navgroup__label">{{ g.label }}</span>
+            <AppIcon name="chevron-down" :size="14" class="navgroup__caret" :class="{ 'is-collapsed': isCollapsed(g) }" />
+          </button>
+          <div v-else-if="g.label && gi > 0" class="navgroup__rule"></div>
+          <div v-show="!isCollapsed(g)" class="navgroup__items">
+            <template v-for="(s, si) in g.sections" :key="si">
+              <p v-if="s.label && sidebarOpen" class="navsection__label">{{ s.label }}</p>
+              <RouterLink
+                v-for="l in s.items" :key="l.to" :to="l.to"
+                class="navlink" :class="{ active: isActive(l.to) }"
+                :title="!sidebarOpen ? l.label : undefined" @click="onNav"
+              >
+                <span class="navlink__icon"><AppIcon :name="l.icon" :size="18" /></span>
+                <span v-if="sidebarOpen" class="navlink__label">{{ l.label }}</span>
+                <span
+                  v-if="canAct && pendingFor(l.to) > 0"
+                  class="navlink__badge"
+                  :title="`${pendingFor(l.to)} awaiting action`"
+                >{{ badge(pendingFor(l.to)) }}</span>
+              </RouterLink>
+            </template>
+          </div>
         </div>
       </nav>
     </aside>
@@ -183,6 +181,10 @@ function logout() {
         </button>
         <div class="crumbs">
           <span class="crumbs__root">{{ brandName }}</span>
+          <template v-if="currentGroup">
+            <AppIcon name="chevron" :size="13" class="crumbs__sep" />
+            <span class="crumbs__group">{{ currentGroup }}</span>
+          </template>
           <AppIcon name="chevron" :size="13" class="crumbs__sep" />
           <span class="crumbs__here">{{ currentLabel }}</span>
         </div>

@@ -80,14 +80,26 @@ export async function ensureForInquiry(inquiry, actor) {
 
   const now = stampNow();
   const reference = await nextReference();
-  const stageData = {
-    INQUIRY: { status: "Qualified", completedAt: now },
-    SEND_REQUIREMENTS: { status: "Pending", startedAt: now },
-  };
+
+  // A lessee inquiring about a specific unit views it first; everything else
+  // (no unit, or a lessor inquiry) skips straight to Send Requirements as before.
+  const wantsViewing = inquiry.inquirerType === "LESSEE" && !!unit;
+  const stageData = wantsViewing
+    ? {
+        INQUIRY: { status: "Qualified", completedAt: now },
+        UNIT_VIEWING: { status: "Pending", startedAt: now },
+      }
+    : {
+        INQUIRY: { status: "Qualified", completedAt: now },
+        UNIT_VIEWING: { status: "Skipped", completedAt: now },
+        SEND_REQUIREMENTS: { status: "Pending", startedAt: now },
+      };
+  const restStage = wantsViewing ? "UNIT_VIEWING" : "SEND_REQUIREMENTS";
+
   const txn = await prisma.leasingTransaction.create({
     data: {
       reference,
-      stage: "SEND_REQUIREMENTS",
+      stage: restStage,
       status: "Pending",
       stageData,
       lesseeName: inquiry.fullName,
@@ -134,6 +146,7 @@ export async function ensureForUnit(unit, actor) {
   const reference = await nextReference();
   const stageData = {
     INQUIRY: { status: "Skipped", completedAt: now },
+    UNIT_VIEWING: { status: "Skipped", completedAt: now },
     SEND_REQUIREMENTS: { status: "Pending", startedAt: now },
   };
   const txn = await prisma.leasingTransaction.create({
@@ -268,6 +281,12 @@ export async function advance(actor, id, { status, remarks } = {}) {
     if (!loi) {
       throw new ConflictError("Upload the Letter of Intent before Contract Signing");
     }
+  }
+
+  // A viewing must reach a verdict (or be explicitly skipped) before the
+  // prospect is asked for any documents.
+  if (txn.stage === "UNIT_VIEWING" && !["Interested", "Skipped"].includes(txn.status)) {
+    throw new ConflictError("Record the viewing outcome (or skip it) before Send Requirements");
   }
 
   const now = stampNow();

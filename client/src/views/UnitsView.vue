@@ -16,6 +16,9 @@ const allUnits = ref([]); // every unit, filtered client-side
 const estateList = ref([]); // [{ id, name, towers:[{id,name}] }]
 const selectedEstateIds = ref([]);
 const selectedTowerIds = ref([]);
+// Import v2 flags a unit whose leases have all ended instead of guessing a
+// new status — this toggle surfaces those rows so staff can resolve them.
+const onlyFlagged = ref(false);
 
 const columns = [
   { key: "unitNumber", label: "Unit #" },
@@ -25,6 +28,7 @@ const columns = [
   { key: "type", label: "Type" },
   { key: "baseRent", label: "Monthly Rent", format: formatPHP },
   { key: "status", label: "Status" },
+  { key: "flags", label: "Flags" },
 ];
 
 const estateOptions = computed(() => estateList.value.map((e) => ({ value: e.id, label: e.name })));
@@ -50,6 +54,7 @@ const rows = computed(() =>
       const towerId = u.tower?.id ?? null;
       if (selectedEstateIds.value.length && !selectedEstateIds.value.includes(estateId)) return false;
       if (selectedTowerIds.value.length && !selectedTowerIds.value.includes(towerId)) return false;
+      if (onlyFlagged.value && !u.needsStatusReview) return false;
       return true;
     })
     .map((u) => ({
@@ -86,6 +91,10 @@ function remove(row) {
     <div class="filters">
       <MultiSelect label="Estate" :options="estateOptions" v-model="selectedEstateIds" />
       <MultiSelect label="Tower" :options="towerOptions" v-model="selectedTowerIds" />
+      <label class="flag-filter">
+        <input type="checkbox" v-model="onlyFlagged" />
+        Needs status review only
+      </label>
       <span class="count">{{ rows.length }} unit{{ rows.length === 1 ? "" : "s" }}</span>
     </div>
 
@@ -95,7 +104,12 @@ function remove(row) {
       :can-write="canWrite"
       @edit="(row) => router.push(`/app/units/${row.id}`)"
       @delete="remove"
-    />
+    >
+      <template #cell-flags="{ row }">
+        <span v-if="row.needsStatusReview" class="review-tag">Needs status review</span>
+        <span v-else class="muted">—</span>
+      </template>
+    </ResourceTable>
   </section>
 </template>
 
@@ -111,4 +125,13 @@ function remove(row) {
   background: var(--paper); border: 1px solid var(--line);
   border-radius: 999px; padding: 0.18rem 0.6rem;
 }
+.flag-filter { display: inline-flex; align-items: center; gap: 0.4rem; font-size: 0.85rem; color: var(--text); cursor: pointer; }
+.review-tag {
+  display: inline-block; font-size: 0.66rem; font-weight: 700;
+  text-transform: uppercase; letter-spacing: 0.06em;
+  padding: 0.15rem 0.45rem; border-radius: 999px;
+  background: var(--paper); border: 1px solid var(--warn); color: var(--warn);
+  white-space: nowrap;
+}
+.muted { color: var(--muted); }
 </style>

@@ -16,6 +16,7 @@ const ENTITY = {
   towers: "Tower",
   "leasing-transactions": "Transaction",
   "lessor-requirements": "Lessor Requirement",
+  "owner-invites": "Owner Invite",
 };
 
 // Derive a human action + entity from the request path/method.
@@ -63,6 +64,15 @@ function classify(path, method) {
     return { entity: "Lessor Requirement", action, entityId: seg1 === "mine" ? null : seg1 };
   }
 
+  if (group === "owner-invites") {
+    // Routes: POST / (create); POST /:token/accept. segs[1] is the raw,
+    // single-use invite token — it must never be persisted into AuditLog, so
+    // entityId is always null here rather than falling through to the
+    // generic segs[1] handling below.
+    const action = segs[2] === "accept" ? "accept" : (method === "POST" ? "create" : method.toLowerCase());
+    return { entity: "Owner Invite", action, entityId: null };
+  }
+
   const sub = segs[2]; // approve | reject | assign | submit | review
   let action;
   if (sub) action = sub;
@@ -77,6 +87,15 @@ function classify(path, method) {
 
 async function record(req, res, body, path) {
   const { entity, action, entityId } = classify(path, req.method);
+
+  // The raw, single-use invite token is a PATH segment (not a query string),
+  // so classify()'s entityId:null above only kept it out of the entityId
+  // column — it was still landing verbatim in `path`. Store a template there
+  // instead of ever persisting the secret itself.
+  let storedPath = path;
+  if (path.startsWith("/api/owner-invites/")) {
+    storedPath = path.endsWith("/accept") ? "/api/owner-invites/:token/accept" : "/api/owner-invites/:token";
+  }
 
   // Actor: the authenticated user, or — for login — the account that just signed in.
   let actorId = req.user?.userId || null;
@@ -97,7 +116,7 @@ async function record(req, res, body, path) {
       actorId, actorName, actorRole, action, entity,
       entityId: entityId || body?.id || null,
       method: req.method,
-      path,
+      path: storedPath,
     },
   });
 }

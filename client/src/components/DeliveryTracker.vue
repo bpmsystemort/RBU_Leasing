@@ -16,7 +16,7 @@ const props = defineProps({
 });
 
 const STAGE_ICON = {
-  INQUIRY: "📝", SEND_REQUIREMENTS: "📎", APPROVAL: "✅",
+  INQUIRY: "📝", UNIT_VIEWING: "🏠", SEND_REQUIREMENTS: "📎", APPROVAL: "✅",
   UNIT_INSPECTION: "🔍", PHOTOSHOOT: "📸", CONTRACT_SIGNING: "✍️",
 };
 const TOTAL = LEASING_STAGES.length;

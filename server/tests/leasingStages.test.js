@@ -7,9 +7,9 @@ import {
 } from "../../shared/leasingStages.js";
 
 describe("Leasing stage engine (lessor flow)", () => {
-  it("has the six lessor stages in order", () => {
+  it("has the seven lessor stages in order", () => {
     expect(STAGE_KEYS).toEqual([
-      "INQUIRY", "SEND_REQUIREMENTS", "APPROVAL",
+      "INQUIRY", "UNIT_VIEWING", "SEND_REQUIREMENTS", "APPROVAL",
       "UNIT_INSPECTION", "PHOTOSHOOT", "CONTRACT_SIGNING",
     ]);
   });
@@ -27,7 +27,7 @@ describe("Leasing stage engine (lessor flow)", () => {
   });
 
   it("does not make Contract Signing schedulable", () => {
-    expect(SCHEDULABLE_STAGE_KEYS).toEqual(["UNIT_INSPECTION", "PHOTOSHOOT"]);
+    expect(SCHEDULABLE_STAGE_KEYS).toEqual(["UNIT_VIEWING", "UNIT_INSPECTION", "PHOTOSHOOT"]);
     expect(isSchedulableStage("CONTRACT_SIGNING")).toBe(false);
     expect(stageByKey("CONTRACT_SIGNING").done).toBe("Signed");
   });
@@ -57,8 +57,8 @@ describe("Leasing stage engine (lessor flow)", () => {
 });
 
 describe("schedulable stages", () => {
-  it("exposes the two schedulable stages with valid outcomes", () => {
-    expect(SCHEDULABLE_STAGE_KEYS).toEqual(["UNIT_INSPECTION", "PHOTOSHOOT"]);
+  it("exposes the three schedulable stages with valid outcomes", () => {
+    expect(SCHEDULABLE_STAGE_KEYS).toEqual(["UNIT_VIEWING", "UNIT_INSPECTION", "PHOTOSHOOT"]);
     for (const key of SCHEDULABLE_STAGE_KEYS) {
       const stage = LEASING_STAGES.find((s) => s.key === key);
       const cfg = SCHEDULABLE_STAGES[key];
@@ -69,6 +69,6 @@ describe("schedulable stages", () => {
     expect(isSchedulableStage("INQUIRY")).toBe(false);
   });
   it("appointment statuses are the standard lifecycle", () => {
-    expect(APPOINTMENT_STATUSES).toEqual(["Scheduled", "Rescheduled", "Completed", "Cancelled", "No-show"]);
+    expect(APPOINTMENT_STATUSES).toEqual(["Proposed", "Confirmed", "Scheduled", "Rescheduled", "Completed", "Cancelled", "No-show"]);
   });
 });

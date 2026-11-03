@@ -7,6 +7,7 @@ import DeliveryTracker from "../components/DeliveryTracker.vue";
 import ApprovalRouting from "../components/ApprovalRouting.vue";
 import TransactionDocuments from "../components/TransactionDocuments.vue";
 import UpcomingAppointment from "../components/UpcomingAppointment.vue";
+import ViewingConfirmPanel from "../components/ViewingConfirmPanel.vue";
 
 const list = ref([]);
 const active = ref(null);
@@ -73,6 +74,8 @@ function eventTime(iso) { return new Date(iso).toLocaleString(undefined, { month
             <div class="rep__name">{{ active.assignedOfficer.name }}</div>
             <div v-if="nextCfg" class="rep__next">Next step: <strong>{{ nextCfg.label }}</strong></div>
           </div>
+
+          <ViewingConfirmPanel :transaction="active" @changed="reloadActive" />
 
           <div class="panel">
             <div class="panel__label">Your documents</div>

@@ -1,7 +1,7 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import express from "express";
 import request from "supertest";
-import { makeLimiter, LIMITS } from "../src/middleware/rateLimit.js";
+import { makeLimiter, LIMITS, rateLimit } from "../src/middleware/rateLimit.js";
 import { hashPassword } from "../src/services/authService.js";
 import { prisma } from "../src/lib/prisma.js";
 import { resetCrudTables } from "./helpers.js";
@@ -105,5 +105,33 @@ describe("the real public routes", () => {
     const allowed = await fire(LIMITS.inquiry, send);
     expect(allowed.every((s) => s === 400)).toBe(true);
     expect((await send()).status).toBe(429);
+  });
+});
+
+// Focused unit test against the hand-rolled middleware itself (used by the
+// owner-invite accept + admin email-test routes), driving the returned
+// middleware directly with mock req/res/next.
+describe("rateLimit middleware", () => {
+  it("lets requests through under the cap, then returns 429 RATE_LIMITED once it's reached", () => {
+    const limiter = rateLimit({ max: 2 });
+    const req = { ip: "203.0.113.5" };
+    const res = { status: vi.fn(() => res), json: vi.fn() };
+    const next = vi.fn();
+
+    // 1st request: under the cap.
+    limiter(req, res, next);
+    expect(next).toHaveBeenCalledTimes(1);
+    expect(res.status).not.toHaveBeenCalled();
+
+    // 2nd request: still under the cap (count reaches max, but isn't over it yet).
+    limiter(req, res, next);
+    expect(next).toHaveBeenCalledTimes(2);
+    expect(res.status).not.toHaveBeenCalled();
+
+    // 3rd request: cap reached — rejected, next() is not called again.
+    limiter(req, res, next);
+    expect(next).toHaveBeenCalledTimes(2);
+    expect(res.status).toHaveBeenCalledWith(429);
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ code: "RATE_LIMITED" }));
   });
 });

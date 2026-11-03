@@ -102,7 +102,7 @@ describe("TransactionDetailView", () => {
     const w = await mountView();
     expect(w.text()).toContain("RBU-2026-000001");
     expect(w.find(".stage-name").text()).toBe("Send Requirements");
-    expect(w.findAll(".ms")).toHaveLength(6); // delivery-tracker milestones
+    expect(w.findAll(".ms")).toHaveLength(7); // delivery-tracker milestones
     expect(w.text()).toContain("Inquiry accepted");
   });
 

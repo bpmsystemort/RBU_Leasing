@@ -1,5 +1,5 @@
 import * as svc from "../services/appointmentService.js";
-import { scheduleSchema, rescheduleSchema, completeSchema, cancelSchema } from "../validation/appointment.js";
+import { scheduleSchema, rescheduleSchema, completeSchema, cancelSchema, proposeSchema } from "../validation/appointment.js";
 
 export async function mine(req, res, next) {
   try { res.json(await svc.listMine(req.user)); } catch (e) { next(e); }
@@ -21,4 +21,10 @@ export async function complete(req, res, next) {
 }
 export async function cancel(req, res, next) {
   try { res.json(await svc.cancel(req.user, req.params.id, cancelSchema.parse(req.body))); } catch (e) { next(e); }
+}
+export async function confirm(req, res, next) {
+  try { res.json(await svc.confirmViewing(req.user, req.params.id)); } catch (e) { next(e); }
+}
+export async function propose(req, res, next) {
+  try { res.json(await svc.proposeViewing(req.user, req.params.id, proposeSchema.parse(req.body))); } catch (e) { next(e); }
 }

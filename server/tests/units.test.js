@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import request from "supertest";
 import { createApp } from "../src/app.js";
+import { prisma } from "../src/lib/prisma.js";
 import { resetCrudTables, tokens, factory } from "./helpers.js";
 
 const app = createApp();
@@ -42,6 +43,18 @@ describe("Units CRUD", () => {
     expect(res.status).toBe(200);
     expect(res.body).toHaveLength(1);
     expect(res.body[0].unitNumber).toBe("A1");
+  });
+
+  it("filters units by needsStatusReview (import v2's unresolved-status flag)", async () => {
+    const owner = await factory.owner();
+    const flagged = await factory.unit(owner.id, { unitNumber: "F1" });
+    await factory.unit(owner.id, { unitNumber: "N1" });
+    await prisma.unit.update({ where: { id: flagged.id }, data: { needsStatusReview: true } });
+    const res = await request(app).get("/api/units?needsStatusReview=true")
+      .set("Authorization", `Bearer ${tokens.viewer()}`);
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(1);
+    expect(res.body[0].unitNumber).toBe("F1");
   });
 
   it("viewer cannot create (403)", async () => {
