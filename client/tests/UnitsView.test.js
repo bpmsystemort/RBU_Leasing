@@ -231,17 +231,19 @@ describe("UnitsView console", () => {
   });
 
   it("sorts by owner, tower, type and status", async () => {
+    // Each key is given a different ordering of A, B, C, so sorting by the
+    // wrong key could not pass by accident.
     const w = await mountWith("VIEWER", [
-      mkUnit(1, { unitNumber: "A", owner: { id: "o1", name: "Zed" }, type: "Studio", status: "VACANT", tower: { id: "t9", name: "Tower C", estate: { id: "e1", name: "Estate Alpha" } } }),
-      mkUnit(2, { unitNumber: "B", owner: { id: "o2", name: "amy" }, type: "1BR", status: "OCCUPIED", tower: { id: "t8", name: "Tower A", estate: { id: "e1", name: "Estate Alpha" } } }),
-      mkUnit(3, { unitNumber: "C", owner: { id: "o3", name: "Bob" }, type: "2BR", status: "BLOCKED", tower: { id: "t7", name: "Tower B", estate: { id: "e1", name: "Estate Alpha" } } }),
+      mkUnit(1, { unitNumber: "A", owner: { id: "o1", name: "Zed" }, type: "1BR", status: "VACANT", tower: { id: "t9", name: "Tower B", estate: { id: "e1", name: "Estate Alpha" } } }),
+      mkUnit(2, { unitNumber: "B", owner: { id: "o2", name: "amy" }, type: "2BR", status: "OCCUPIED", tower: { id: "t8", name: "Tower C", estate: { id: "e1", name: "Estate Alpha" } } }),
+      mkUnit(3, { unitNumber: "C", owner: { id: "o3", name: "Bob" }, type: "Studio", status: "BLOCKED", tower: { id: "t7", name: "Tower A", estate: { id: "e1", name: "Estate Alpha" } } }),
     ]);
     await headerButton(w, "Owner").trigger("click");
     expect(unitOrder(w)).toEqual(["B", "C", "A"]); // amy, Bob, Zed (case-insensitive)
     await headerButton(w, "Tower").trigger("click");
-    expect(unitOrder(w)).toEqual(["B", "C", "A"]); // Tower A, B, C
+    expect(unitOrder(w)).toEqual(["C", "A", "B"]); // Tower A, B, C
     await headerButton(w, "Type").trigger("click");
-    expect(unitOrder(w)).toEqual(["B", "C", "A"]); // 1BR, 2BR, Studio
+    expect(unitOrder(w)).toEqual(["A", "B", "C"]); // 1BR, 2BR, Studio
     await headerButton(w, "Status").trigger("click");
     expect(unitOrder(w)).toEqual(["C", "B", "A"]); // BLOCKED, OCCUPIED, VACANT
   });
@@ -297,7 +299,10 @@ describe("UnitsView console", () => {
       mkUnit(2, { status: "UNAVAILABLE" }),
       mkUnit(3, { status: "BLOCKED" }),
     ];
-    // Queue the list for the three reloads that follow; mountWith queues the initial load.
+    // Four list loads happen here: the initial one plus one reload per click.
+    // mountWith queues one result below, so queue the other three first. The
+    // queue is first-in-first-out and every entry is the same rows, so which
+    // load takes which entry does not matter.
     for (let i = 0; i < 3; i++) units.list.mockImplementationOnce(() => Promise.resolve(rows));
     const w = await mountWith("LEASING_OFFICER", rows);
     const clickAction = async (text) => {
@@ -410,6 +415,19 @@ describe("UnitsView console", () => {
     await flushPromises();
     expect(w.find(".action-error").text()).toBe("Unit is not flagged for review");
     expect(units.list.mock.calls.length).toBe(before);
+  });
+
+  it("says the change was saved when the action works but the list refresh fails", async () => {
+    const w = await mountWith("LEASING_OFFICER", [mkUnit(1, { status: "VACANT" })]);
+    units.list.mockImplementationOnce(() => Promise.reject(new Error("Network Error")));
+    await w.find("tbody button").trigger("click");
+    await flushPromises();
+    expect(units.setUnavailable).toHaveBeenCalledWith("p1");
+    const text = w.find(".action-error").text();
+    expect(text).toBe("Saved, but the list could not be refreshed. Reload the page.");
+    expect(text).not.toContain("could not be completed");
+    // the row's button is usable again
+    expect(w.find("tbody button").element.disabled).toBe(false);
   });
 
   it("shows only the error, with no empty table or pager, when the first load fails", async () => {

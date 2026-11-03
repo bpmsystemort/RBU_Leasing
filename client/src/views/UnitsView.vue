@@ -173,10 +173,18 @@ async function runAction(row, call) {
   actionError.value = "";
   busyId.value = row.id;
   try {
-    await call();
-    await reload();
-  } catch (e) {
-    actionError.value = e.response?.data?.error || "That action could not be completed.";
+    try {
+      await call();
+    } catch (e) {
+      actionError.value = e.response?.data?.error || "That action could not be completed.";
+      return;
+    }
+    // The action is saved; a failed reload must not be reported as a failed action.
+    try {
+      await reload();
+    } catch {
+      actionError.value = "Saved, but the list could not be refreshed. Reload the page.";
+    }
   } finally {
     busyId.value = null;
   }

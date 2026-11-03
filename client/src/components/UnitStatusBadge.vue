@@ -43,11 +43,14 @@ const tone = computed(() => (LABELS[props.status] ? props.status.toLowerCase() :
 .unit-status--blocked { background: var(--warn-050); border-color: var(--warn); }
 .unit-status--blocked .unit-status__dot { background: var(--warn); }
 
-/* Occupied — the brand accent: in use. */
-.unit-status--occupied { background: var(--accent-050); border-color: var(--accent); }
-.unit-status--occupied .unit-status__dot { background: var(--accent); }
+/* Occupied — neutral and solid: in use. Deliberately not green, so it never
+   reads as Vacant; the tint, border and dot all come from theme tokens that
+   flip with the dark theme, and the text stays on --text. */
+.unit-status--occupied { background: var(--thead-bg); border-color: var(--line-strong); }
+.unit-status--occupied .unit-status__dot { background: var(--text); }
 
-/* Unavailable — neutral grey: taken off the market by staff. */
-.unit-status--unavailable { background: var(--thead-bg); border-color: var(--line-strong); color: var(--muted); }
-.unit-status--unavailable .unit-status__dot { background: var(--faint); }
+/* Unavailable — muted with a dashed border and a hollow dot: taken off the
+   market by staff. */
+.unit-status--unavailable { background: var(--paper); border: 1px dashed var(--line-strong); color: var(--muted); }
+.unit-status--unavailable .unit-status__dot { background: transparent; box-shadow: inset 0 0 0 1px var(--faint); }
 </style>
