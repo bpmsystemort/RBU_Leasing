@@ -15,5 +15,8 @@ router.patch("/:id", requireRole("ADMIN", "LEASING_OFFICER", "UNIT_OWNER"), ctrl
 router.patch("/:id/submit", requireRole("ADMIN", "LEASING_OFFICER", "UNIT_OWNER"), ctrl.submit);
 router.patch("/:id/approve", requireWrite, ctrl.approve);
 router.patch("/:id/reject", requireWrite, ctrl.reject);
+router.patch("/:id/unavailable", requireWrite, ctrl.setUnavailable);
+router.patch("/:id/restore", requireWrite, ctrl.restore);
+router.patch("/:id/release-block", requireWrite, ctrl.releaseBlock);
 router.delete("/:id", requireWrite, ctrl.remove);
 export default router;

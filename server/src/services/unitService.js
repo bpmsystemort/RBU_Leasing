@@ -1,6 +1,6 @@
 import { prisma } from "../lib/prisma.js";
 import { NotFoundError, ConflictError, InvalidReferenceError } from "../lib/errors.js";
-import { ensureForUnit } from "./leasingTransactionService.js";
+import { ensureForUnit, activeDealForUnit } from "./leasingTransactionService.js";
 
 const withHierarchy = { tower: { include: { estate: true } }, owner: { select: { id: true, name: true } } };
 
@@ -120,17 +120,66 @@ export async function createUnit(data) {
   return prisma.unit.create({ data: { baseRent: 0, ...data } });
 }
 
+// Staff may only move a unit between VACANT and UNAVAILABLE by hand. BLOCKED and
+// OCCUPIED are driven by the leasing pipeline, so a unit in either is never
+// flipped manually (release the block / finish the deal first). Returns false
+// when the unit is already in the target state (nothing to do).
+function assertManualChange(unit, target) {
+  if (!["VACANT", "UNAVAILABLE"].includes(target)) {
+    throw new InvalidReferenceError("Availability can only be set to VACANT or UNAVAILABLE");
+  }
+  if (unit.status === target) return false;
+  if (unit.status === "BLOCKED" || unit.status === "OCCUPIED") {
+    throw new ConflictError(`Release or finish the ${unit.status} unit first`);
+  }
+  return true;
+}
+
+async function assertNoActiveDeal(unitId) {
+  if (await activeDealForUnit(unitId)) {
+    throw new ConflictError("Unit has an active deal; release it first");
+  }
+}
+
+// Conditional write: only succeeds while the unit is still in the status we
+// checked, so a concurrent change surfaces as a 409 instead of being overwritten.
+async function changeAvailability(id, from, to) {
+  const { count } = await prisma.unit.updateMany({ where: { id, status: from }, data: { status: to } });
+  if (count === 0) throw new ConflictError("Unit status changed; reload and try again");
+  return getUnit(id);
+}
+
+export async function setUnavailable(user, id) {
+  void user;
+  const unit = await getUnit(id);
+  if (!assertManualChange(unit, "UNAVAILABLE")) return unit;
+  await assertNoActiveDeal(id);
+  return changeAvailability(id, "VACANT", "UNAVAILABLE");
+}
+
+export async function restoreUnit(user, id) {
+  void user;
+  const unit = await getUnit(id);
+  if (!assertManualChange(unit, "VACANT")) return unit;
+  return changeAvailability(id, "UNAVAILABLE", "VACANT");
+}
+
 export async function updateUnit(user, id, data) {
   const unit = await getUnit(id);
   const { submit, ...fields } = data;
   void submit;
   if (user && user.role === "UNIT_OWNER") {
+    delete fields.status;              // owners never change availability
     if (unit.ownerId !== user.unitOwnerId) throw new NotFoundError("Unit not found");
     if (!["DRAFT", "REJECTED"].includes(unit.approvalStatus)) {
       throw new ConflictError("This unit can no longer be edited");
     }
     fields.ownerId = user.unitOwnerId; // never let an owner reassign
     delete fields.approvalStatus;      // status changes only via submit/approve/reject
+  }
+  if (fields.status !== undefined && fields.status !== unit.status) {
+    assertManualChange(unit, fields.status);
+    if (fields.status === "UNAVAILABLE") await assertNoActiveDeal(id);
   }
   if (fields.ownerId) await assertOwnerExists(fields.ownerId);
   if (fields.towerId) await assertTowerExists(fields.towerId);

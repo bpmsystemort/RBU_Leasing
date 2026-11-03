@@ -129,6 +129,41 @@ export async function openTransactionForUnit(unitId) {
   });
 }
 
+// --- unit availability guards ----------------------------------------------
+
+const OPEN = { OR: [{ finalStatus: null }, { finalStatus: { notIn: ["Signed", "Declined"] } }] };
+const HAS_PROSPECT = { OR: [{ inquiryId: { not: null } }, { tenantId: { not: null } }] };
+
+// A deal with a prospect that has not ended. The lessor-onboarding transaction
+// that ensureForUnit opens has no prospect, so it never counts: only a deal
+// with an inquiry or a tenant can hold or block a unit.
+export function activeDealForUnit(unitId, exceptTransactionId) {
+  return prisma.leasingTransaction.findFirst({
+    where: { unitId, ...(exceptTransactionId ? { id: { not: exceptTransactionId } } : {}), AND: [OPEN, HAS_PROSPECT] },
+    orderBy: { createdAt: "desc" },
+  });
+}
+
+// Unit-level release of a block. This is also how a block whose holder is gone
+// (its transaction was deleted, the FK nulled the pointer) gets cleared.
+export async function releaseUnitBlock(actor, unitId) {
+  const unit = await prisma.unit.findUnique({ where: { id: unitId } });
+  if (!unit) throw new NotFoundError("Unit not found");
+  if (unit.status !== "BLOCKED") throw new ConflictError("Unit is not blocked");
+  const { count } = await prisma.unit.updateMany({
+    where: { id: unitId, status: "BLOCKED" },
+    data: { status: "VACANT", blockedByTransactionId: null },
+  });
+  if (count === 0) throw new ConflictError("Unit is not blocked");
+  if (unit.blockedByTransactionId) {
+    await logEvent(unit.blockedByTransactionId, actor, "Unit block released");
+  }
+  return prisma.unit.findUnique({
+    where: { id: unitId },
+    include: { tower: { include: { estate: true } }, owner: { select: { id: true, name: true } } },
+  });
+}
+
 // Opens the onboarding transaction for a unit the lessor has registered
 // (idempotent). There is no inquiry and no lessee — this is the lessor
 // bringing a unit to market, so Inquiry is marked Skipped rather than

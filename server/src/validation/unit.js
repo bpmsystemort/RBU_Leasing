@@ -12,7 +12,8 @@ export const unitCreateSchema = z.object({
   // Optional: base rent is captured at the lease level, not on the unit. The
   // service defaults it to 0 so registration works without it.
   baseRent: z.coerce.number().nonnegative().nullish(),
-  status: z.enum(["VACANT", "OCCUPIED"]).optional(),
+  // BLOCKED and OCCUPIED are pipeline-driven; only VACANT/UNAVAILABLE are manual.
+  status: z.enum(["VACANT", "UNAVAILABLE"]).optional(),
   submit: z.boolean().optional(),
 });
 
