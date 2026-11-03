@@ -77,6 +77,8 @@ export async function ensureForInquiry(inquiry, actor) {
       include: { listing: { select: { published: true } } },
     });
   }
+  // One active deal per unit: backstop for the pre-check in acceptInquiry.
+  if (unit) await assertNoRivalDeal(unit);
 
   const now = stampNow();
   const reference = await nextReference();
@@ -142,6 +144,27 @@ export function activeDealForUnit(unitId, exceptTransactionId) {
     where: { unitId, ...(exceptTransactionId ? { id: { not: exceptTransactionId } } : {}), AND: [OPEN, HAS_PROSPECT] },
     orderBy: { createdAt: "desc" },
   });
+}
+
+// Refuses a second prospect deal on a unit that already has one.
+async function assertNoRivalDeal(unit) {
+  const rival = await activeDealForUnit(unit.id);
+  if (rival) {
+    throw new ConflictError(`Unit ${unit.unitNumber} already has an active deal (${rival.reference}) for another prospect; release it first`);
+  }
+}
+
+// The same check as ensureForInquiry, run before an inquiry is accepted so a
+// refusal leaves the inquiry exactly as it was. Returns quietly when there is
+// nothing to conflict with: no unit, a unit that is gone, or an inquiry that
+// already has its transaction (accepting it again is idempotent).
+export async function assertUnitFreeForInquiry(inquiry) {
+  if (!inquiry.unitId) return;
+  const existing = await prisma.leasingTransaction.findUnique({ where: { inquiryId: inquiry.id }, select: { id: true } });
+  if (existing) return;
+  const unit = await prisma.unit.findUnique({ where: { id: inquiry.unitId }, select: { id: true, unitNumber: true } });
+  if (!unit) return;
+  await assertNoRivalDeal(unit);
 }
 
 // Unit-level release of a block. This is also how a block whose holder is gone
