@@ -36,6 +36,8 @@ enum UnitApprovalStatus {
 enum UnitStatus {
   VACANT
   OCCUPIED
+  BLOCKED
+  UNAVAILABLE
 }
 
 enum LeaseStatus {
@@ -124,6 +126,8 @@ model UnitOwner {
   leasingTransactions LeasingTransaction[]
   lessorRequirements LessorRequirement[]
   invites    OwnerInvite[]
+  assignmentsFrom UnitAssignmentEvent[] @relation("AssignmentFrom")
+  assignmentsTo   UnitAssignmentEvent[] @relation("AssignmentTo")
   createdAt  DateTime              @default(now())
   updatedAt  DateTime              @updatedAt
 
@@ -221,15 +225,40 @@ model Unit {
   approvalStatus UnitApprovalStatus @default(APPROVED)
   reviewRemarks  String?
   needsStatusReview Boolean @default(false)
+  // The transaction currently holding this unit in BLOCKED status; cleared
+  // (SetNull) if that transaction is deleted. See manual-migrations/2026-11-03-units-blocking-2-block-and-assignments.sql.
+  blockedByTransactionId String?
+  blockedByTransaction   LeasingTransaction? @relation("UnitBlock", fields: [blockedByTransactionId], references: [id], onDelete: SetNull)
   leases     Lease[]
-  leasingTransactions LeasingTransaction[]
+  leasingTransactions LeasingTransaction[] @relation("TxnUnit")
   inquiries           Inquiry[]
   photos     UnitPhoto[]
   listing    UnitListing?
+  assignmentEvents UnitAssignmentEvent[]
   createdAt  DateTime   @default(now())
   updatedAt  DateTime   @updatedAt
 
   @@unique([ownerId, unitKey])
+  @@index([blockedByTransactionId])
+}
+
+// Append-only history of a unit moving between owners. `fromOwnerId` is null
+// for the first assignment. Rows go with the unit (Cascade); an owner that
+// appears as the destination of a move cannot be deleted (Restrict).
+model UnitAssignmentEvent {
+  id          String     @id @default(cuid())
+  unit        Unit       @relation(fields: [unitId], references: [id], onDelete: Cascade)
+  unitId      String
+  fromOwner   UnitOwner? @relation("AssignmentFrom", fields: [fromOwnerId], references: [id], onDelete: SetNull)
+  fromOwnerId String?
+  toOwner     UnitOwner  @relation("AssignmentTo", fields: [toOwnerId], references: [id], onDelete: Restrict)
+  toOwnerId   String
+  actorId     String?
+  actorName   String?
+  reason      String?
+  createdAt   DateTime   @default(now())
+
+  @@index([unitId])
 }
 
 model UnitPhoto {
@@ -420,7 +449,7 @@ model LeasingTransaction {
 
   inquiry     Inquiry?   @relation(fields: [inquiryId], references: [id])
   inquiryId   String?    @unique
-  unit        Unit?      @relation(fields: [unitId], references: [id])
+  unit        Unit?      @relation("TxnUnit", fields: [unitId], references: [id])
   unitId      String?
   tenant      Tenant?    @relation(fields: [tenantId], references: [id])
   tenantId    String?
@@ -429,6 +458,7 @@ model LeasingTransaction {
   assignedOfficer   User? @relation("TxnOfficer", fields: [assignedOfficerId], references: [id])
   assignedOfficerId String?
 
+  blockedUnits Unit[]    @relation("UnitBlock")
   events      TransactionEvent[]
   documents   TransactionDocument[]
   approvalSteps ApprovalStep[]
