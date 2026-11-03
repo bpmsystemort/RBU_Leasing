@@ -49,7 +49,9 @@ describe("Units & Blocking schema", () => {
     const other = await factory.owner({ name: "Other" });
     const unit = await factory.unit(owner.id);
     await prisma.unitAssignmentEvent.create({ data: { unitId: unit.id, toOwnerId: other.id } });
-    await expect(prisma.unitOwner.delete({ where: { id: other.id } })).rejects.toMatchObject({ code: "P2003" });
+    // Postgres reports ON DELETE RESTRICT as 23001, which Prisma does not map to
+    // P2003 (that is 23503, NO ACTION), so assert on the constraint name instead.
+    await expect(prisma.unitOwner.delete({ where: { id: other.id } })).rejects.toThrow(/UnitAssignmentEvent_toOwnerId_fkey/);
     expect(await prisma.unitOwner.count({ where: { id: other.id } })).toBe(1);
   });
 });
