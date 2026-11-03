@@ -15,21 +15,30 @@ committed under `docs/superpowers/` and travel with the branch.
 
 | Work | Branch | State | Tests |
 |---|---|---|---|
-| Import v2 (Excel portfolio) | `feat/import-validation-preview` @ `d5297e5` | ✅ built, merge-ready | green |
-| Owner accounts + linking | `feat/owner-accounts` @ `e78e491` | ✅ built, merge-ready | green |
-| Configurable Email Settings | `feat/email-settings` @ `bf1606e` | ✅ built + final review, merge-ready | server 539/539 · client 431/431 |
-| **SP1 — Navigation & shell** | `feat/nav-shell` @ `891563c` | ✅ built + final review **READY TO MERGE** | client 442/442 |
+| Import v2 (Excel portfolio) | `feat/import-validation-preview` | ✅ **MERGED → master** | green |
+| Owner accounts + linking | `feat/owner-accounts` | ✅ **MERGED → master** | green |
+| Configurable Email Settings | `feat/email-settings` | ✅ **MERGED → master** | green |
+| **SP1 — Navigation & shell** | `feat/nav-shell` | ✅ **MERGED → master** | — |
 | **SP2 — Units & blocking** | `feat/units-blocking` @ `6670c27` | 🟡 **spec only** (no code yet) — awaiting approval | — |
 | SP3 — Leasing workflow & move-in | — | ⬜ not started | — |
 | SP4 — Leases/expiry/renewal + dashboard | — | ⬜ not started | — |
 | SP5 — People/accounts + Email History | — | ⬜ not started | — |
 
-The branches are **stacked**: `units-blocking` → `nav-shell` → `email-settings` →
-`owner-accounts` → `import-validation-preview` → `master`. Checking out
-`feat/units-blocking` gives you **all** of the work above.
+**✅ `master` is now at `268ecc0` (pushed to origin) — the four features above are MERGED.**
+On 2026-11-03 the feature stack was integrated with `origin/master`'s **security-hardening
+line** (which had diverged: endpoint throttling, access control, and "honest password reset"
+that removed readable-password storage). The merge preserved **both**: all four features AND
+every security fix. Conflict resolutions (rate-limiting reconciled to keep both limiters;
+`passwordPlain` exposure + its last write removed) were security-reviewed (verdict: safe) and
+validated — **server 70 files / 565 tests, client 65 / 451, build OK**.
 
-Nothing is merged to `master` yet. On this dev machine the built work (email + SP1 nav +
-import + accounts) runs live on `:5050`; SP2 has no code to see.
+`feat/units-blocking` (SP2) has been **merged onto this secured master**, so SP2 now builds on
+the hardened base — its code equals master; only the SP2 spec + this doc are extra.
+
+**⚠️ New manual migration from the security line to apply to each DB:**
+`server/prisma/manual-migrations/2026-10-27-clear-readable-passwords.sql` (nulls any
+pre-existing readable passwords). Apply it to `rbu_leasing` + `rbu_leasing_test` (+ prod)
+alongside the others.
 
 ---
 
@@ -159,17 +168,18 @@ before working. Don't edit both without pulling, or the branches diverge and nee
 
 ## 6. Merge-to-master plan (your call; I can do it locally + push, you approve)
 
-Merge in stack order so each builds on the last, fast-forward where possible:
-1. `feat/import-validation-preview` → `master`
-2. `feat/owner-accounts` → `master`
-3. `feat/email-settings` → `master`
-4. `feat/nav-shell` → `master`  *(SP1 — READY TO MERGE)*
-5. `feat/units-blocking` → `master`  *(only after SP2 is actually built; today it is spec-only)*
+1. ✅ `feat/import-validation-preview` → `master` — **DONE** (in `268ecc0`)
+2. ✅ `feat/owner-accounts` → `master` — **DONE**
+3. ✅ `feat/email-settings` → `master` — **DONE**
+4. ✅ `feat/nav-shell` (SP1) → `master` — **DONE**
+   *(1–4 landed together as one integration merge `268ecc0`, reconciled with origin/master's
+   security line; the earlier `ahead 18 / behind 14` divergence is resolved — origin/master's
+   14 security commits are preserved in master.)*
+5. ⬜ `feat/units-blocking` (SP2) → `master` — **pending** (only after SP2 is actually built;
+   today it is spec-only, already rebased onto the secured master).
 
-Before merging each: its tests green (they are) + its manual SQL migrations applied to the
-target/production DB. `master` currently shows `ahead 18, behind 14` vs `origin/master` —
-reconcile that (pull/rebase) before merging so history is clean. **Pushing `master` and
-deploying is yours to run.**
+Before deploying `master`: apply its manual SQL migrations to the production DB — including the
+new `2026-10-27-clear-readable-passwords.sql`. Deploying is yours to run.
 
 ---
 
