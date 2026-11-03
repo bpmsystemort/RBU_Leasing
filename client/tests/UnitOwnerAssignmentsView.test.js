@@ -34,10 +34,11 @@ import UnitOwnerAssignmentsView from "../src/views/UnitOwnerAssignmentsView.vue"
 import { units, owners } from "../src/lib/resource.js";
 import { useAuthStore } from "../src/stores/auth.js";
 
+let router; // the router of the most recent mountView, so a test can change the query later
 async function mountView(query = "") {
   setActivePinia(createPinia());
   useAuthStore().setSession({ token: "t", user: { role: "ADMIN" } });
-  const router = createRouter({
+  router = createRouter({
     history: createMemoryHistory(),
     routes: [{ path: "/app/unit-assignments", component: UnitOwnerAssignmentsView }],
   });
@@ -179,5 +180,73 @@ describe("UnitOwnerAssignmentsView", () => {
   it("opens no dialog when ?unit= names an unknown unit", async () => {
     const w = await mountView("?unit=nope");
     expect(w.find(".reassign-dialog").exists()).toBe(false);
+  });
+
+  it("labels each owner option with the owner's email when there is one", async () => {
+    owners.linkable.mockResolvedValueOnce([
+      { id: "o1", name: "Ana Owner", email: "ana@example.com" },
+      { id: "o2", name: "Ben Owner", email: "ben@example.com" },
+      { id: "o3", name: "Cara Owner", email: null },
+    ]);
+    const w = await mountView();
+    await openReassign(w, "12A");
+    await w.find(".reassign-dialog .ss__btn").trigger("click");
+    const labels = w.findAll(".reassign-dialog .ss__opt").map((b) => b.text());
+    expect(labels).toContain("Ben Owner (ben@example.com)");
+    expect(labels).toContain("Cara Owner"); // no email, plain name
+    expect(labels.some((l) => l.startsWith("Ana Owner"))).toBe(false); // current owner still excluded
+  });
+
+  it("closes the dialog on Escape without changing anything", async () => {
+    const w = await mountView();
+    await openReassign(w, "12A");
+    expect(w.find(".reassign-dialog").exists()).toBe(true);
+    await w.find(".reassign-dialog").trigger("keydown", { key: "Escape" });
+    expect(w.find(".reassign-dialog").exists()).toBe(false);
+    expect(units.assignOwner).not.toHaveBeenCalled();
+  });
+
+  it("Escape inside the open owner dropdown closes only the dropdown", async () => {
+    const w = await mountView();
+    await openReassign(w, "12A");
+    await w.find(".reassign-dialog .ss__btn").trigger("click");
+    expect(w.find(".ss__panel").exists()).toBe(true);
+    await w.find(".ss__search").trigger("keydown", { key: "Escape" });
+    expect(w.find(".ss__panel").exists()).toBe(false);
+    expect(w.find(".reassign-dialog").exists()).toBe(true);
+  });
+
+  it("names the dialog by its heading and the owner picker by its label", async () => {
+    const w = await mountView();
+    await openReassign(w, "12A");
+    const dialog = w.find(".reassign-dialog");
+    expect(w.find(`#${dialog.attributes("aria-labelledby")}`).text()).toBe("Reassign unit 12A");
+    const group = dialog.find("[role='group']");
+    expect(w.find(`#${group.attributes("aria-labelledby")}`).text()).toBe("New owner");
+  });
+
+  it("opens the panel when ?unit= changes on the already-mounted page, and scrolls that row into view", async () => {
+    const w = await mountView();
+    expect(w.find(".reassign-dialog").exists()).toBe(false);
+    const scroll = vi.fn();
+    rowFor(w, "7B").element.scrollIntoView = scroll;
+    await router.push("/app/unit-assignments?unit=u2");
+    await flushPromises();
+    expect(w.find(".reassign-dialog").exists()).toBe(true);
+    expect(w.find(".reassign-dialog").text()).toContain("7B");
+    expect(scroll).toHaveBeenCalledWith({ block: "center" });
+
+    // a different unit in the query swaps the dialog to that unit
+    await router.push("/app/unit-assignments?unit=u1");
+    await flushPromises();
+    expect(w.find(".reassign-dialog").text()).toContain("12A");
+  });
+
+  it("shows only the error, not the empty-state text, when the first load fails", async () => {
+    units.list.mockRejectedValueOnce({ response: { data: { error: "Units are unavailable" } } });
+    const w = await mountView();
+    expect(w.find(".error").text()).toBe("Units are unavailable");
+    expect(w.text()).not.toContain("No units yet.");
+    expect(w.find(".assign-table").exists()).toBe(false);
   });
 });

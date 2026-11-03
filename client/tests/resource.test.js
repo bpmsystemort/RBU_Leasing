@@ -105,6 +105,12 @@ describe("unit availability, ownership and blocking clients", () => {
     expect(history).toEqual([{ id: "1" }]);
   });
 
+  it("units.markReviewed PATCHes the mark-reviewed path and returns the unit", async () => {
+    const res = await units.markReviewed("u1");
+    expect(api.patch).toHaveBeenCalledWith("/units/u1/mark-reviewed");
+    expect(res).toEqual({ id: "3" });
+  });
+
   it("leasingTransactions.blockUnit / unblockUnit PATCH the block and unblock paths", async () => {
     await leasingTransactions.blockUnit("t1");
     expect(api.patch).toHaveBeenCalledWith("/leasing-transactions/t1/block");

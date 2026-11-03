@@ -184,6 +184,7 @@ async function runAction(row, call) {
 const setUnavailable = (row) => runAction(row, () => units.setUnavailable(row.id));
 const restore = (row) => runAction(row, () => units.restore(row.id));
 const releaseBlock = (row) => runAction(row, () => units.releaseBlock(row.id));
+const markReviewed = (row) => runAction(row, () => units.markReviewed(row.id));
 
 function approvalLabel(value) {
   return value ? value.charAt(0) + value.slice(1).toLowerCase() : "—";
@@ -238,7 +239,7 @@ function remove(row) {
     <p v-if="actionError" class="error action-error" role="alert">{{ actionError }}</p>
     <p v-if="loading" class="loading">Loading units…</p>
 
-    <template v-else>
+    <template v-else-if="!loadError">
       <ResourceTable
         :columns="columns"
         :rows="pagedRows"
@@ -273,13 +274,23 @@ function remove(row) {
               :disabled="busyId === row.id"
               @click="restore(row)"
             >Restore</button>
+            <!-- A block with a holder deal is released from the Blocking page by
+                 whoever holds it; only a holderless block is released here. -->
             <button
-              v-if="row.status === 'BLOCKED'"
+              v-if="row.status === 'BLOCKED' && !row.blockedByTransactionId"
               type="button"
               class="avail-release"
               :disabled="busyId === row.id"
               @click="releaseBlock(row)"
             >Release block</button>
+            <span v-else-if="row.status === 'BLOCKED'" class="avail-held muted">Held by a deal</span>
+            <button
+              v-if="row.needsStatusReview"
+              type="button"
+              class="avail-reviewed"
+              :disabled="busyId === row.id"
+              @click="markReviewed(row)"
+            >Mark reviewed</button>
             <RouterLink v-if="canWrite" class="avail-reassign" :to="`/app/unit-assignments?unit=${row.id}`">Reassign owner</RouterLink>
           </div>
         </template>
@@ -331,6 +342,7 @@ function remove(row) {
 .loading { color: var(--muted); font-size: 0.9rem; }
 .avail { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; }
 .avail-reassign { font-size: 0.8rem; font-weight: 600; white-space: nowrap; }
+.avail-held { font-size: 0.78rem; white-space: nowrap; }
 .pager { display: flex; align-items: center; justify-content: flex-end; gap: 0.75rem; margin-top: 1rem; }
 .pager__info { font-size: 0.85rem; color: var(--muted); }
 </style>

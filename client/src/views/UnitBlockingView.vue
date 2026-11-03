@@ -19,18 +19,23 @@ function prospectName(t) {
   return t.lesseeName || t.tenant?.name || t.inquiry?.fullName || "—";
 }
 
-// A BLOCKED unit's holder is the deal named by blockedByTransactionId. When that
-// deal is gone (deleted, so the pointer was cleared) the unit has no holder and
-// is released at unit level instead.
+// A BLOCKED unit's holder is the deal named by blockedByTransactionId. Three
+// cases: the deal is in the loaded list (show it; releasing goes through the
+// deal); the pointer is set but that deal is not in the list (it belongs to
+// another officer, or the list is stale: say so and offer no release, since a
+// unit-level release would free someone else's reservation); no pointer at all
+// (a holderless block, released at unit level).
 const blockedRows = computed(() =>
   blockedUnits.value.map((u) => {
-    const holder = u.blockedByTransactionId
-      ? deals.value.find((t) => t.id === u.blockedByTransactionId) || null
+    const pointer = u.blockedByTransactionId || null;
+    const holder = pointer
+      ? deals.value.find((t) => t.id === pointer) || null
       : null;
     return {
       id: u.id,
       unitNumber: u.unitNumber,
       towerName: u.tower?.name || "Unassigned",
+      outsideView: Boolean(pointer && !holder),
       holderId: holder ? holder.id : null,
       holderReference: holder ? holder.reference : "",
       holderName: holder ? prospectName(holder) : "",
@@ -60,7 +65,8 @@ async function load() {
   try {
     const [b, v, t] = await Promise.all([
       units.list({ status: "BLOCKED" }),
-      units.list({ status: "VACANT" }),
+      // only approved units can be reserved for a deal
+      units.list({ status: "VACANT", approvalStatus: "APPROVED" }),
       leasingTransactions.list(),
     ]);
     blockedUnits.value = b;
@@ -93,10 +99,13 @@ async function run(key, call) {
   busy[key] = false;
 }
 
-const release = (row) => run(
-  `release:${row.id}`,
-  () => (row.holderId ? leasingTransactions.unblockUnit(row.holderId) : units.releaseBlock(row.id)),
-);
+const release = (row) => {
+  if (row.outsideView) return; // not ours to release; the row offers no button either
+  return run(
+    `release:${row.id}`,
+    () => (row.holderId ? leasingTransactions.unblockUnit(row.holderId) : units.releaseBlock(row.id)),
+  );
+};
 const block = (row) => run(`block:${row.id}`, () => leasingTransactions.blockUnit(row.id));
 </script>
 
@@ -111,7 +120,7 @@ const block = (row) => run(`block:${row.id}`, () => leasingTransactions.blockUni
     <p v-if="actionError" class="error action-error" role="alert">{{ actionError }}</p>
     <p v-if="loading" class="muted">Loading…</p>
 
-    <template v-else>
+    <template v-else-if="!loadError">
       <h2>Blocked units</h2>
       <table v-if="blockedRows.length" class="blocked-table">
         <thead>
@@ -125,10 +134,11 @@ const block = (row) => run(`block:${row.id}`, () => leasingTransactions.blockUni
               <template v-if="r.holderId">
                 <code class="ref">{{ r.holderReference }}</code> {{ r.holderName }}
               </template>
+              <span v-else-if="r.outsideView" class="muted outside-view">Held by a deal outside your view</span>
               <span v-else class="muted">No holder</span>
             </td>
             <td class="actions">
-              <button type="button" class="release-btn" :disabled="busy[`release:${r.id}`]" @click="release(r)">Release</button>
+              <button v-if="!r.outsideView" type="button" class="release-btn" :disabled="busy[`release:${r.id}`]" @click="release(r)">Release</button>
             </td>
           </tr>
         </tbody>

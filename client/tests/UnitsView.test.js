@@ -15,6 +15,7 @@ vi.mock("../src/lib/resource.js", () => ({
     setUnavailable: vi.fn(() => Promise.resolve()),
     restore: vi.fn(() => Promise.resolve()),
     releaseBlock: vi.fn(() => Promise.resolve()),
+    markReviewed: vi.fn(() => Promise.resolve({})),
   },
   estates: {
     list: vi.fn(() => Promise.resolve([
@@ -140,6 +141,7 @@ describe("UnitsView console", () => {
     units.setUnavailable.mockClear();
     units.restore.mockClear();
     units.releaseBlock.mockClear();
+    units.markReviewed.mockClear();
   });
 
   it("search narrows rows by unit number, owner name and tower name, case-insensitively", async () => {
@@ -353,5 +355,69 @@ describe("UnitsView console", () => {
     const firstRowButtons = w.findAll("tbody tr")[0].findAll("button").map((b) => b.text());
     expect(firstRowButtons).toEqual(["Set unavailable", "Edit", "Delete"]);
     expect(w.findAll("th").map((h) => h.text())).toContain("Actions");
+  });
+
+  it("offers Release block only for a holderless block; a block held by a deal says so instead", async () => {
+    const w = await mountWith("LEASING_OFFICER", [
+      mkUnit(1, { status: "BLOCKED", blockedByTransactionId: null }),
+      mkUnit(2, { status: "BLOCKED", blockedByTransactionId: "t-1" }),
+    ]);
+    const rows = w.findAll("tbody tr");
+    expect(rows[0].findAll("button").map((b) => b.text())).toEqual(["Release block"]);
+    expect(rows[0].find(".avail-held").exists()).toBe(false);
+    expect(rows[1].findAll("button")).toHaveLength(0);
+    expect(rows[1].find(".avail-held").text()).toBe("Held by a deal");
+  });
+
+  it("shows Mark reviewed only on flagged rows, and only to a write role", async () => {
+    const data = [
+      mkUnit(1, { needsStatusReview: true }),
+      mkUnit(2, { needsStatusReview: false }),
+      mkUnit(3, { status: "OCCUPIED", needsStatusReview: true }),
+    ];
+    const w = await mountWith("LEASING_OFFICER", data);
+    const rows = w.findAll("tbody tr");
+    expect(rows[0].findAll("button").map((b) => b.text())).toEqual(["Set unavailable", "Mark reviewed"]);
+    expect(rows[1].findAll("button").map((b) => b.text())).toEqual(["Set unavailable"]);
+    expect(rows[2].findAll("button").map((b) => b.text())).toEqual(["Mark reviewed"]);
+
+    const viewer = await mountWith("VIEWER", data);
+    expect(viewer.find(".avail-reviewed").exists()).toBe(false);
+    expect(viewer.text()).not.toContain("Mark reviewed");
+  });
+
+  it("Mark reviewed calls the client with the unit id, then reloads the list", async () => {
+    const w = await mountWith("LEASING_OFFICER", [mkUnit(1, { needsStatusReview: true })]);
+    expect(w.find(".review-tag").exists()).toBe(true);
+    // the reload comes back with the flag cleared
+    units.list.mockImplementationOnce(() => Promise.resolve([mkUnit(1, { needsStatusReview: false })]));
+    const before = units.list.mock.calls.length;
+    await w.find(".avail-reviewed").trigger("click");
+    await flushPromises();
+    expect(units.markReviewed).toHaveBeenCalledWith("p1");
+    expect(units.list.mock.calls.length).toBe(before + 1);
+    expect(w.find(".avail-reviewed").exists()).toBe(false);
+    expect(w.find(".review-tag").exists()).toBe(false);
+  });
+
+  it("shows the server's error when Mark reviewed is refused, without reloading", async () => {
+    const w = await mountWith("LEASING_OFFICER", [mkUnit(1, { needsStatusReview: true })]);
+    units.markReviewed.mockImplementationOnce(() =>
+      Promise.reject({ response: { data: { error: "Unit is not flagged for review" } } }),
+    );
+    const before = units.list.mock.calls.length;
+    await w.find(".avail-reviewed").trigger("click");
+    await flushPromises();
+    expect(w.find(".action-error").text()).toBe("Unit is not flagged for review");
+    expect(units.list.mock.calls.length).toBe(before);
+  });
+
+  it("shows only the error, with no empty table or pager, when the first load fails", async () => {
+    units.list.mockImplementationOnce(() => Promise.reject({ response: { data: { error: "Units are unavailable" } } }));
+    const w = await mountView("VIEWER");
+    expect(w.find(".error").text()).toBe("Units are unavailable");
+    expect(w.find("table").exists()).toBe(false);
+    expect(w.text()).not.toContain("No records.");
+    expect(w.find(".pager").exists()).toBe(false);
   });
 });

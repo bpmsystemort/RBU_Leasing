@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted } from "vue";
+import { ref, computed, watch, nextTick, onMounted } from "vue";
 import { useRoute } from "vue-router";
 import { units, owners } from "../lib/resource.js";
 import { formatDate } from "../lib/formatters.js";
@@ -40,7 +40,8 @@ const unitRows = computed(() =>
 const ownerOptions = computed(() =>
   ownerList.value
     .filter((o) => o.id !== reassigning.value?.owner?.id)
-    .map((o) => ({ value: o.id, label: o.name })),
+    // the email tells apart owners who share a name
+    .map((o) => ({ value: o.id, label: o.email ? `${o.name} (${o.email})` : o.name })),
 );
 
 function approvalLabel(value) {
@@ -61,17 +62,44 @@ onMounted(async () => {
   } finally {
     loading.value = false;
   }
-  // Arriving from the Units page ("Reassign owner") opens that unit's dialog.
-  const wanted = route.query.unit ? String(route.query.unit) : "";
-  const target = wanted && unitRows.value.find((u) => u.id === wanted);
-  if (target) openReassign(target);
+  await openFromQuery();
 });
 
+// Arriving from the Units page ("Reassign owner") opens that unit's dialog and
+// scrolls its row into view. The same mounted page can be sent a different
+// ?unit= later (a second click from another link), so the query is watched too.
+const rowEls = new Map(); // unit id -> its <tr>
+function setRowEl(id, el) {
+  if (el) rowEls.set(id, el);
+  else rowEls.delete(id);
+}
+async function openFromQuery() {
+  const wanted = route.query.unit ? String(route.query.unit) : "";
+  const target = wanted && unitRows.value.find((u) => u.id === wanted);
+  if (!target) return;
+  openReassign(target);
+  await nextTick();
+  rowEls.get(target.id)?.scrollIntoView?.({ block: "center" });
+}
+// While the first load is running, onMounted picks the query up when it is done.
+watch(() => route.query.unit, () => {
+  if (!loading.value) openFromQuery();
+});
+
+const dialogEl = ref(null);
 function openReassign(row) {
   reassigning.value = row;
   toOwnerId.value = null;
   reason.value = "";
   reassignError.value = "";
+  // Focus moves into the dialog so Escape reaches it.
+  nextTick(() => dialogEl.value?.focus?.());
+}
+// Escape closes the dialog, except when it is only closing the owner dropdown.
+function onDialogKeydown(e) {
+  if (e.key !== "Escape") return;
+  if (e.target?.closest?.(".ss__panel")) return;
+  closeReassign();
 }
 function closeReassign() {
   reassigning.value = null;
@@ -133,13 +161,13 @@ async function toggleHistory(row) {
     <p v-if="loadError" class="error" role="alert">{{ loadError }}</p>
     <p v-if="loading" class="muted">Loading units…</p>
 
-    <template v-else>
+    <template v-else-if="!loadError">
       <table v-if="unitRows.length" class="assign-table">
         <thead>
           <tr><th>Unit</th><th>Tower</th><th>Current owner</th><th>Verification</th><th></th></tr>
         </thead>
         <tbody>
-          <tr v-for="u in unitRows" :key="u.id" class="unit-row">
+          <tr v-for="u in unitRows" :key="u.id" :ref="(el) => setRowEl(u.id, el)" class="unit-row">
             <td>{{ u.unitNumber }}</td>
             <td>{{ u.towerName }}</td>
             <td>{{ u.ownerName }}</td>
@@ -154,7 +182,7 @@ async function toggleHistory(row) {
           </tr>
         </tbody>
       </table>
-      <p v-else-if="!loadError" class="muted empty">No units yet.</p>
+      <p v-else class="muted empty">No units yet.</p>
 
       <div v-if="historyUnit" class="history" aria-label="Assignment history">
         <h2>Assignment history · {{ historyUnit.unitNumber }}</h2>
@@ -178,11 +206,19 @@ async function toggleHistory(row) {
     </template>
 
     <div v-if="reassigning" class="modal-backdrop" @click.self="closeReassign">
-      <div class="modal reassign-dialog" role="dialog" aria-modal="true" aria-label="Reassign owner">
-        <h2>Reassign unit {{ reassigning.unitNumber }}</h2>
+      <div
+        ref="dialogEl"
+        class="modal reassign-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="reassign-title"
+        tabindex="-1"
+        @keydown="onDialogKeydown"
+      >
+        <h2 id="reassign-title">Reassign unit {{ reassigning.unitNumber }}</h2>
         <p class="muted small">Currently owned by {{ reassigning.ownerName }}. Existing logins, deals and leases are not changed.</p>
-        <div class="field">
-          <label>New owner</label>
+        <div class="field" role="group" aria-labelledby="reassign-owner-label">
+          <label id="reassign-owner-label">New owner</label>
           <SearchableSelect
             v-model="toOwnerId"
             :options="ownerOptions"
@@ -226,6 +262,7 @@ async function toggleHistory(row) {
 .tag[data-approval="SUBMITTED"] { background: var(--warn-050); border-color: var(--warn); }
 .actions { white-space: nowrap; }
 .actions button + button { margin-left: 0.4rem; }
+.reassign-dialog:focus { outline: none; } /* focused programmatically so Escape works */
 .history { margin-top: 1.75rem; }
 .history h2 { margin: 0 0 0.75rem; font-size: 1.05rem; }
 .field { display: flex; flex-direction: column; gap: 0.35rem; margin-bottom: 0.9rem; }

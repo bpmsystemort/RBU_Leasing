@@ -7,8 +7,10 @@ const BLOCKED = [
   { id: "b2", unitNumber: "9C", status: "BLOCKED", blockedByTransactionId: null, tower: { id: "tw2", name: "Tower Two" } },
 ];
 const VACANT = [
-  { id: "v1", unitNumber: "5D", status: "VACANT", blockedByTransactionId: null, tower: { id: "tw1", name: "Tower One" } },
-  { id: "v2", unitNumber: "6E", status: "VACANT", blockedByTransactionId: null, tower: { id: "tw2", name: "Tower Two" } },
+  { id: "v1", unitNumber: "5D", status: "VACANT", approvalStatus: "APPROVED", blockedByTransactionId: null, tower: { id: "tw1", name: "Tower One" } },
+  { id: "v2", unitNumber: "6E", status: "VACANT", approvalStatus: "APPROVED", blockedByTransactionId: null, tower: { id: "tw2", name: "Tower Two" } },
+  // vacant but not approved yet: the console must not offer to block it
+  { id: "v3", unitNumber: "7F", status: "VACANT", approvalStatus: "SUBMITTED", blockedByTransactionId: null, tower: { id: "tw1", name: "Tower One" } },
 ];
 const DEALS = [
   // holds the blocked unit 12A
@@ -25,13 +27,17 @@ const DEALS = [
   { id: "t-notvacant", reference: "LT-006", lesseeName: "Occupied Unit", unitId: "o1", inquiryId: "q6", tenantId: null, finalStatus: null, unit: { id: "o1", unitNumber: "1Z" } },
   // eligible: prospect is a tenant, name comes from the tenant
   { id: "t-tenant", reference: "LT-007", lesseeName: null, unitId: "v2", inquiryId: null, tenantId: "tn1", finalStatus: null, tenant: { id: "tn1", name: "Cora Lim" }, unit: { id: "v2", unitNumber: "6E" } },
+  // not eligible: its unit is vacant but still SUBMITTED, so the approved-only vacant list leaves it out
+  { id: "t-unapproved", reference: "LT-008", lesseeName: "Dina Uy", unitId: "v3", inquiryId: "q8", tenantId: null, finalStatus: null, unit: { id: "v3", unitNumber: "7F" } },
 ];
 
 vi.mock("../src/lib/resource.js", () => ({
   units: {
-    list: vi.fn((params) => Promise.resolve(
-      params?.status === "BLOCKED" ? BLOCKED : params?.status === "VACANT" ? VACANT : [...BLOCKED, ...VACANT],
-    )),
+    list: vi.fn((params) => {
+      const all = params?.status === "BLOCKED" ? BLOCKED : params?.status === "VACANT" ? VACANT : [...BLOCKED, ...VACANT];
+      // like the server, honour the approvalStatus filter when one is sent
+      return Promise.resolve(params?.approvalStatus ? all.filter((u) => u.approvalStatus === params.approvalStatus) : all);
+    }),
     releaseBlock: vi.fn(() => Promise.resolve({})),
   },
   leasingTransactions: {
@@ -143,5 +149,46 @@ describe("UnitBlockingView", () => {
     await w.findAll(".blocked-row")[0].find(".release-btn").trigger("click");
     await flushPromises();
     expect(w.find(".action-error").text()).toContain("This deal is not blocking a unit");
+  });
+
+  it("says a block is held by a deal outside the officer's view, and offers no Release", async () => {
+    // b3 names a holder deal that is not in the loaded deals list. The first
+    // units.list call of a load is the BLOCKED one.
+    units.list.mockImplementationOnce(() => Promise.resolve([
+      ...BLOCKED,
+      { id: "b3", unitNumber: "3F", status: "BLOCKED", blockedByTransactionId: "t-other", tower: { id: "tw1", name: "Tower One" } },
+    ]));
+    const w = await mountView();
+    const rows = w.findAll(".blocked-table .blocked-row");
+    expect(rows).toHaveLength(3);
+    expect(rows[2].text()).toContain("3F");
+    expect(rows[2].text()).toContain("Held by a deal outside your view");
+    expect(rows[2].text()).not.toContain("No holder");
+    expect(rows[2].find(".release-btn").exists()).toBe(false);
+    // the other two rows keep their Release buttons
+    expect(rows[0].find(".release-btn").exists()).toBe(true);
+    expect(rows[1].find(".release-btn").exists()).toBe(true);
+    expect(leasingTransactions.unblockUnit).not.toHaveBeenCalled();
+    expect(units.releaseBlock).not.toHaveBeenCalled();
+  });
+
+  it("asks for approved vacant units only, so an unapproved unit gets no Block button", async () => {
+    const w = await mountView();
+    expect(units.list).toHaveBeenCalledWith({ status: "VACANT", approvalStatus: "APPROVED" });
+    // t-unapproved (LT-008) has an open deal on unit 7F, which is vacant but SUBMITTED
+    const text = w.find(".ready-table").text();
+    expect(text).not.toContain("LT-008");
+    expect(text).not.toContain("7F");
+    expect(w.findAll(".ready-row").find((r) => r.text().includes("LT-008"))).toBeUndefined();
+    expect(w.findAll(".block-btn")).toHaveLength(2);
+  });
+
+  it("shows only the error, not the empty-state text, when the first load fails", async () => {
+    units.list.mockImplementationOnce(() => Promise.reject({ response: { data: { error: "Blocking is unavailable" } } }));
+    const w = await mountView();
+    expect(w.find(".error").text()).toBe("Blocking is unavailable");
+    expect(w.text()).not.toContain("No units are blocked.");
+    expect(w.text()).not.toContain("No deals are ready to block.");
+    expect(w.find("table").exists()).toBe(false);
   });
 });
