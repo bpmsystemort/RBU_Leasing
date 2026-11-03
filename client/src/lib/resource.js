@@ -19,6 +19,14 @@ owners.linkable = () => api.get("/owners/linkable").then((r) => r.data);
 export function ownerMe() { return api.get("/owners/me").then((r) => r.data); }
 export function tenantMe() { return api.get("/tenants/me").then((r) => r.data); }
 export const units = resource("/units");
+// Availability + ownership: staff set a VACANT unit unavailable (and restore it),
+// release a stale block, and ADMIN reassigns the owner with a recorded reason.
+units.setUnavailable = (id) => api.patch(`/units/${id}/unavailable`).then((r) => r.data);
+units.restore = (id) => api.patch(`/units/${id}/restore`).then((r) => r.data);
+units.releaseBlock = (id) => api.patch(`/units/${id}/release-block`).then((r) => r.data);
+units.assignOwner = (id, { toOwnerId, reason }) =>
+  api.patch(`/units/${id}/assign-owner`, { toOwnerId, reason }).then((r) => r.data);
+units.assignments = (id) => api.get(`/units/${id}/assignments`).then((r) => r.data);
 export const tenants = resource("/tenants");
 export const leases = resource("/leases");
 export const estates = resource("/estates");
@@ -51,6 +59,9 @@ export const leasingTransactions = {
   returnStage: (id, data) => api.patch(`/leasing-transactions/${id}/return`, data || {}).then((r) => r.data),
   link: (id, data) => api.patch(`/leasing-transactions/${id}/link`, data).then((r) => r.data),
   remove: (id) => api.delete(`/leasing-transactions/${id}`).then((r) => r.data),
+  // unit reservation: a prospect's deal holds (blocks) its unit until released or signed
+  blockUnit: (id) => api.patch(`/leasing-transactions/${id}/block`).then((r) => r.data),
+  unblockUnit: (id) => api.patch(`/leasing-transactions/${id}/unblock`).then((r) => r.data),
   mine: () => api.get("/leasing-transactions/mine").then((r) => r.data),
   getMine: (id) => api.get(`/leasing-transactions/mine/${id}`).then((r) => r.data),
   // supporting documents

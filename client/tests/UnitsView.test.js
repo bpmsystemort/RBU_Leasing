@@ -12,6 +12,9 @@ vi.mock("../src/lib/resource.js", () => ({
         tower: { id: "t2", name: "Tower Two", estate: { id: "e2", name: "Estate Beta" } } },
     ])),
     remove: vi.fn(() => Promise.resolve()),
+    setUnavailable: vi.fn(() => Promise.resolve()),
+    restore: vi.fn(() => Promise.resolve()),
+    releaseBlock: vi.fn(() => Promise.resolve()),
   },
   estates: {
     list: vi.fn(() => Promise.resolve([
@@ -22,6 +25,7 @@ vi.mock("../src/lib/resource.js", () => ({
 }));
 
 import UnitsView from "../src/views/UnitsView.vue";
+import { units } from "../src/lib/resource.js";
 import { useAuthStore } from "../src/stores/auth.js";
 
 const stub = { template: "<div/>" };
@@ -30,6 +34,7 @@ function makeRouter() {
     { path: "/units", component: UnitsView },
     { path: "/units/new", component: stub },
     { path: "/units/:id", component: stub },
+    { path: "/app/unit-assignments", component: stub },
   ]});
 }
 async function mountView(role) {
@@ -100,5 +105,253 @@ describe("UnitsView", () => {
   it("is read-only for a non-admin (even a write role)", async () => {
     const w = await mountView("LEASING_OFFICER");
     expect(w.text()).not.toContain("New unit");
+  });
+});
+
+// ---- Units console: search, filters, sorting, paging, badges, availability ----
+function mkUnit(i, over = {}) {
+  return {
+    id: `p${i}`,
+    unitNumber: `U${String(i).padStart(2, "0")}`,
+    baseRent: String(1000 * i),
+    type: "Studio",
+    status: "VACANT",
+    approvalStatus: "APPROVED",
+    needsStatusReview: false,
+    owner: { id: "o1", name: "Owner One" },
+    tower: { id: "t1", name: "Tower One", estate: { id: "e1", name: "Estate Alpha" } },
+    ...over,
+  };
+}
+// 30 units: U01-U27 VACANT, U28-U30 BLOCKED.
+const thirty = () => Array.from({ length: 30 }, (_, k) => mkUnit(k + 1, k >= 27 ? { status: "BLOCKED" } : {}));
+
+async function mountWith(role, rows) {
+  units.list.mockImplementationOnce(() => Promise.resolve(rows));
+  return mountView(role);
+}
+// First cell of each body row is the unit number.
+const unitOrder = (w) => w.findAll("tbody tr").map((r) => r.findAll("td")[0].text());
+const headerButton = (w, label) => w.findAll("th .th-sort").find((b) => b.text().startsWith(label));
+
+describe("UnitsView console", () => {
+  beforeEach(() => {
+    setActivePinia(createPinia());
+    units.setUnavailable.mockClear();
+    units.restore.mockClear();
+    units.releaseBlock.mockClear();
+  });
+
+  it("search narrows rows by unit number, owner name and tower name, case-insensitively", async () => {
+    const w = await mountWith("VIEWER", [
+      mkUnit(1, { unitNumber: "101", owner: { id: "o1", name: "Maria Santos" }, tower: { id: "t1", name: "Alpha Tower", estate: { id: "e1", name: "Estate Alpha" } } }),
+      mkUnit(2, { unitNumber: "202", owner: { id: "o2", name: "Juan Cruz" }, tower: { id: "t2", name: "Beta Tower", estate: { id: "e2", name: "Estate Beta" } } }),
+      mkUnit(3, { unitNumber: "303", owner: { id: "o3", name: "Ana Reyes" }, tower: { id: "t2", name: "Beta Tower", estate: { id: "e2", name: "Estate Beta" } } }),
+    ]);
+    expect(unitOrder(w)).toEqual(["101", "202", "303"]);
+
+    await w.find(".search").setValue("MARIA");
+    expect(unitOrder(w)).toEqual(["101"]);
+
+    await w.find(".search").setValue("beta");
+    expect(unitOrder(w)).toEqual(["202", "303"]);
+
+    await w.find(".search").setValue("202");
+    expect(unitOrder(w)).toEqual(["202"]);
+
+    await w.find(".search").setValue("no such thing");
+    expect(w.find("tbody").text()).toContain("No records.");
+  });
+
+  it("filters by unit status and by approval status", async () => {
+    const w = await mountWith("VIEWER", [
+      mkUnit(1, { unitNumber: "V1", status: "VACANT", approvalStatus: "APPROVED" }),
+      mkUnit(2, { unitNumber: "B1", status: "BLOCKED", approvalStatus: "DRAFT" }),
+      mkUnit(3, { unitNumber: "O1", status: "OCCUPIED", approvalStatus: "SUBMITTED" }),
+      mkUnit(4, { unitNumber: "N1", status: "UNAVAILABLE", approvalStatus: "REJECTED" }),
+    ]);
+    expect(unitOrder(w)).toEqual(["V1", "B1", "O1", "N1"]);
+
+    await w.find(".status-filter").setValue("BLOCKED");
+    expect(unitOrder(w)).toEqual(["B1"]);
+    await w.find(".status-filter").setValue("UNAVAILABLE");
+    expect(unitOrder(w)).toEqual(["N1"]);
+    await w.find(".status-filter").setValue("ALL");
+    expect(unitOrder(w)).toEqual(["V1", "B1", "O1", "N1"]);
+
+    await w.find(".approval-filter").setValue("SUBMITTED");
+    expect(unitOrder(w)).toEqual(["O1"]);
+    await w.find(".approval-filter").setValue("REJECTED");
+    expect(unitOrder(w)).toEqual(["N1"]);
+
+    // the two filters combine
+    await w.find(".approval-filter").setValue("DRAFT");
+    await w.find(".status-filter").setValue("VACANT");
+    expect(w.find("tbody").text()).toContain("No records.");
+  });
+
+  it("renders a status badge with the right text for each state", async () => {
+    const w = await mountWith("VIEWER", [
+      mkUnit(1, { status: "VACANT" }),
+      mkUnit(2, { status: "BLOCKED" }),
+      mkUnit(3, { status: "OCCUPIED" }),
+      mkUnit(4, { status: "UNAVAILABLE" }),
+    ]);
+    const badges = w.findAll("tbody .unit-status");
+    expect(badges.map((b) => b.text())).toEqual(["Vacant", "Blocked", "Occupied", "Unavailable"]);
+    expect(badges.map((b) => b.attributes("data-status"))).toEqual(["VACANT", "BLOCKED", "OCCUPIED", "UNAVAILABLE"]);
+  });
+
+  it("toggles sort order when a sortable header is clicked", async () => {
+    const w = await mountWith("VIEWER", [
+      mkUnit(1, { unitNumber: "20", baseRent: "900" }),
+      mkUnit(2, { unitNumber: "3", baseRent: "15000" }),
+      mkUnit(3, { unitNumber: "100", baseRent: "2500" }),
+    ]);
+    expect(unitOrder(w)).toEqual(["20", "3", "100"]); // server order until a sort is chosen
+
+    await headerButton(w, "Unit #").trigger("click");
+    expect(unitOrder(w)).toEqual(["3", "20", "100"]); // natural (numeric-aware) ascending
+    expect(w.find("th .sort-arrow").text()).toBe("▲");
+    expect(headerButton(w, "Unit #").element.closest("th").getAttribute("aria-sort")).toBe("ascending");
+
+    await headerButton(w, "Unit #").trigger("click");
+    expect(unitOrder(w)).toEqual(["100", "20", "3"]);
+    expect(w.find("th .sort-arrow").text()).toBe("▼");
+    expect(headerButton(w, "Unit #").element.closest("th").getAttribute("aria-sort")).toBe("descending");
+
+    // rent sorts numerically (a text sort would put 15000 first), and a new key starts ascending
+    await headerButton(w, "Monthly Rent").trigger("click");
+    expect(unitOrder(w)).toEqual(["20", "100", "3"]);
+    expect(w.findAll("th .sort-arrow")).toHaveLength(1);
+    await headerButton(w, "Monthly Rent").trigger("click");
+    expect(unitOrder(w)).toEqual(["3", "100", "20"]);
+  });
+
+  it("sorts by owner, tower, type and status", async () => {
+    const w = await mountWith("VIEWER", [
+      mkUnit(1, { unitNumber: "A", owner: { id: "o1", name: "Zed" }, type: "Studio", status: "VACANT", tower: { id: "t9", name: "Tower C", estate: { id: "e1", name: "Estate Alpha" } } }),
+      mkUnit(2, { unitNumber: "B", owner: { id: "o2", name: "amy" }, type: "1BR", status: "OCCUPIED", tower: { id: "t8", name: "Tower A", estate: { id: "e1", name: "Estate Alpha" } } }),
+      mkUnit(3, { unitNumber: "C", owner: { id: "o3", name: "Bob" }, type: "2BR", status: "BLOCKED", tower: { id: "t7", name: "Tower B", estate: { id: "e1", name: "Estate Alpha" } } }),
+    ]);
+    await headerButton(w, "Owner").trigger("click");
+    expect(unitOrder(w)).toEqual(["B", "C", "A"]); // amy, Bob, Zed (case-insensitive)
+    await headerButton(w, "Tower").trigger("click");
+    expect(unitOrder(w)).toEqual(["B", "C", "A"]); // Tower A, B, C
+    await headerButton(w, "Type").trigger("click");
+    expect(unitOrder(w)).toEqual(["B", "C", "A"]); // 1BR, 2BR, Studio
+    await headerButton(w, "Status").trigger("click");
+    expect(unitOrder(w)).toEqual(["C", "B", "A"]); // BLOCKED, OCCUPIED, VACANT
+  });
+
+  it("paginates 25 per page and resets to page 1 when a filter changes", async () => {
+    const w = await mountWith("VIEWER", thirty());
+    expect(w.findAll("tbody tr")).toHaveLength(25);
+    expect(w.find(".pager__info").text()).toBe("Page 1 of 2");
+    expect(w.find(".pager__prev").element.disabled).toBe(true);
+
+    await w.find(".pager__next").trigger("click");
+    expect(w.findAll("tbody tr")).toHaveLength(5);
+    expect(unitOrder(w)[0]).toBe("U26");
+    expect(w.find(".pager__info").text()).toBe("Page 2 of 2");
+    expect(w.find(".pager__next").element.disabled).toBe(true);
+
+    await w.find(".pager__prev").trigger("click");
+    expect(w.find(".pager__info").text()).toBe("Page 1 of 2");
+
+    // go to page 2, then change a filter that still leaves two pages (27 vacant units)
+    await w.find(".pager__next").trigger("click");
+    expect(w.find(".pager__info").text()).toBe("Page 2 of 2");
+    await w.find(".status-filter").setValue("VACANT");
+    expect(w.find(".pager__info").text()).toBe("Page 1 of 2");
+    expect(w.findAll("tbody tr")).toHaveLength(25);
+    expect(unitOrder(w)[0]).toBe("U01");
+  });
+
+  it("shows availability buttons per status to a leasing officer, without Edit/Delete", async () => {
+    const w = await mountWith("LEASING_OFFICER", [
+      mkUnit(1, { status: "VACANT" }),
+      mkUnit(2, { status: "UNAVAILABLE" }),
+      mkUnit(3, { status: "BLOCKED" }),
+      mkUnit(4, { status: "OCCUPIED" }),
+    ]);
+    const rows = w.findAll("tbody tr");
+    expect(rows[0].findAll("button").map((b) => b.text())).toEqual(["Set unavailable"]);
+    expect(rows[1].findAll("button").map((b) => b.text())).toEqual(["Restore"]);
+    expect(rows[2].findAll("button").map((b) => b.text())).toEqual(["Release block"]);
+    expect(rows[3].findAll("button")).toHaveLength(0);
+
+    const headers = w.findAll("th").map((h) => h.text());
+    expect(headers).toContain("Availability");
+    expect(headers).not.toContain("Actions");
+    expect(w.find("tbody").text()).not.toContain("Edit");
+    expect(w.find("tbody").text()).not.toContain("Delete");
+    expect(w.find(".avail-reassign").exists()).toBe(false); // reassigning is ADMIN-only
+  });
+
+  it("Set unavailable, Restore and Release block call the client with the unit id and reload the list", async () => {
+    const rows = [
+      mkUnit(1, { status: "VACANT" }),
+      mkUnit(2, { status: "UNAVAILABLE" }),
+      mkUnit(3, { status: "BLOCKED" }),
+    ];
+    // Queue the list for the three reloads that follow; mountWith queues the initial load.
+    for (let i = 0; i < 3; i++) units.list.mockImplementationOnce(() => Promise.resolve(rows));
+    const w = await mountWith("LEASING_OFFICER", rows);
+    const clickAction = async (text) => {
+      const before = units.list.mock.calls.length;
+      await w.findAll("tbody button").find((b) => b.text() === text).trigger("click");
+      await flushPromises();
+      expect(units.list.mock.calls.length).toBe(before + 1);
+    };
+
+    await clickAction("Set unavailable");
+    expect(units.setUnavailable).toHaveBeenCalledWith("p1");
+    await clickAction("Restore");
+    expect(units.restore).toHaveBeenCalledWith("p2");
+    await clickAction("Release block");
+    expect(units.releaseBlock).toHaveBeenCalledWith("p3");
+  });
+
+  it("shows the server's error text when an availability call is rejected", async () => {
+    const w = await mountWith("LEASING_OFFICER", [mkUnit(3, { status: "BLOCKED" })]);
+    units.releaseBlock.mockImplementationOnce(() =>
+      Promise.reject({ response: { data: { error: "Unit is held by an active deal" } } }),
+    );
+    const before = units.list.mock.calls.length;
+    await w.find("tbody button").trigger("click");
+    await flushPromises();
+    expect(w.find(".action-error").text()).toBe("Unit is held by an active deal");
+    expect(units.list.mock.calls.length).toBe(before); // nothing changed, so no reload
+  });
+
+  it("shows an inline error when the unit list cannot be loaded", async () => {
+    units.list.mockImplementationOnce(() => Promise.reject({ response: { data: { error: "Units are unavailable" } } }));
+    const w = await mountView("VIEWER");
+    expect(w.find(".error").text()).toBe("Units are unavailable");
+  });
+
+  it("gives a read-only viewer no availability buttons or column", async () => {
+    const w = await mountWith("VIEWER", [
+      mkUnit(1, { status: "VACANT" }),
+      mkUnit(2, { status: "UNAVAILABLE" }),
+      mkUnit(3, { status: "BLOCKED" }),
+    ]);
+    expect(w.findAll("tbody button")).toHaveLength(0);
+    expect(w.findAll("th").map((h) => h.text())).not.toContain("Availability");
+    expect(w.find(".avail-reassign").exists()).toBe(false);
+  });
+
+  it("gives the Super Admin Reassign owner links, availability buttons and Edit/Delete", async () => {
+    const w = await mountWith("ADMIN", [mkUnit(1, { status: "VACANT" }), mkUnit(2, { status: "OCCUPIED" })]);
+    const links = w.findAll(".avail-reassign");
+    expect(links).toHaveLength(2);
+    expect(links[0].text()).toBe("Reassign owner");
+    expect(links[0].attributes("href")).toBe("/app/unit-assignments?unit=p1");
+    expect(links[1].attributes("href")).toBe("/app/unit-assignments?unit=p2");
+
+    const firstRowButtons = w.findAll("tbody tr")[0].findAll("button").map((b) => b.text());
+    expect(firstRowButtons).toEqual(["Set unavailable", "Edit", "Delete"]);
+    expect(w.findAll("th").map((h) => h.text())).toContain("Actions");
   });
 });
