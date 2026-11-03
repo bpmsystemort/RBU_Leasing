@@ -159,3 +159,22 @@ describe("import endpoints", () => {
     expect(noFile.status).toBe(400);
   });
 });
+
+describe("commitWorkbook status pass and stale blocks", () => {
+  it("a BLOCKED unit with an active lease ends OCCUPIED with its block pointer cleared", async () => {
+    const buf = await wbuf([R({ unit: "6D", ...ACTIVE })]);
+    await commitWorkbook(buf);
+    const unit = await prisma.unit.findFirstOrThrow({ where: { unitNumber: "6D" } });
+    const txn = await prisma.leasingTransaction.create({
+      data: { reference: "RBU-2026-900001", stage: "UNIT_VIEWING", status: "Pending" },
+    });
+    await prisma.unit.update({ where: { id: unit.id }, data: { status: "BLOCKED", blockedByTransactionId: txn.id } });
+
+    await commitWorkbook(buf);
+
+    const after = await prisma.unit.findUnique({ where: { id: unit.id } });
+    expect(after.status).toBe("OCCUPIED");
+    expect(after.blockedByTransactionId).toBeNull();
+    expect(after.needsStatusReview).toBe(false);
+  });
+});

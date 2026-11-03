@@ -448,3 +448,49 @@ describe("PATCH /api/units/:id/release-block by holder", () => {
     expect(await statusOf(unit.id)).toBe("VACANT");
   });
 });
+
+describe("PATCH /api/units/:id/mark-reviewed", () => {
+  const flagged = async (over = {}) => {
+    const owner = await factory.owner();
+    const unit = await factory.unit(owner.id, { status: "OCCUPIED", ...over });
+    await prisma.unit.update({ where: { id: unit.id }, data: { needsStatusReview: true } });
+    return { owner, unit };
+  };
+  const flagOf = async (id) => (await prisma.unit.findUnique({ where: { id } })).needsStatusReview;
+
+  it("clears the flag and leaves the status alone", async () => {
+    const { unit } = await flagged();
+
+    const res = await patch(`${unit.id}/mark-reviewed`, tokens.officer());
+    expect(res.status).toBe(200);
+    expect(res.body.id).toBe(unit.id);
+    expect(res.body.needsStatusReview).toBe(false);
+    expect(res.body.status).toBe("OCCUPIED");
+    expect(res.body.owner).toMatchObject({ id: unit.ownerId });
+    expect(await flagOf(unit.id)).toBe(false);
+    expect(await statusOf(unit.id)).toBe("OCCUPIED");
+  });
+
+  it("is idempotent, and an admin can do it too", async () => {
+    const { unit } = await flagged();
+    expect((await patch(`${unit.id}/mark-reviewed`, tokens.admin())).status).toBe(200);
+
+    const again = await patch(`${unit.id}/mark-reviewed`, tokens.officer());
+    expect(again.status).toBe(200);
+    expect(again.body.needsStatusReview).toBe(false);
+    expect(await statusOf(unit.id)).toBe("OCCUPIED");
+  });
+
+  it("is forbidden for viewer, unit owner and tenant (403) and leaves the flag set", async () => {
+    const { owner, unit } = await flagged();
+    const tenant = await factory.tenant();
+    for (const token of [tokens.viewer(), tokens.owner(owner.id), tokens.tenant(tenant.id)]) {
+      expect((await patch(`${unit.id}/mark-reviewed`, token)).status).toBe(403);
+    }
+    expect(await flagOf(unit.id)).toBe(true);
+  });
+
+  it("returns 404 for an unknown unit", async () => {
+    expect((await patch("ghost/mark-reviewed", tokens.officer())).status).toBe(404);
+  });
+});

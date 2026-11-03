@@ -183,6 +183,11 @@ export async function updateUnit(user, id, data) {
     }
     fields.ownerId = user.unitOwnerId; // never let an owner reassign
     delete fields.approvalStatus;      // status changes only via submit/approve/reject
+  } else if (fields.ownerId !== undefined) {
+    // The edit form re-sends the unchanged owner; moving the unit to another
+    // owner goes through reassignment so the history is always written.
+    if (fields.ownerId === unit.ownerId) delete fields.ownerId;
+    else throw new ConflictError("Use Reassign owner to move a unit to another owner");
   }
   // Never re-write the status the unit already has: an echo must not clobber a
   // concurrent pipeline change (e.g. BLOCKED) made since we read the row.
@@ -200,6 +205,14 @@ export async function updateUnit(user, id, data) {
     return getUnit(id);
   }
   return prisma.unit.update({ where: { id }, data: fields, include: withHierarchy });
+}
+
+// Clears the "needs a status decision" flag import v2 raised. Staff's way to
+// say the unit's current status is right; the status itself is never changed.
+export async function markReviewed(user, id) {
+  void user;
+  await getUnit(id);
+  return prisma.unit.update({ where: { id }, data: { needsStatusReview: false }, include: withHierarchy });
 }
 
 export async function removeUnit(id) {

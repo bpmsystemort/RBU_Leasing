@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import request from "supertest";
 import { createApp } from "../src/app.js";
 import { prisma } from "../src/lib/prisma.js";
@@ -313,5 +313,57 @@ describe("Deleting an owner that appears in assignment history", () => {
     expect(removed.status).toBe(204);
     const firstMove = await prisma.unitAssignmentEvent.findFirst({ where: { unitId: unit.id, toOwnerId: b.id } });
     expect(firstMove.fromOwnerId).toBeNull();
+  });
+});
+
+describe("A foreign-key failure while reassigning", () => {
+  it("is reported as an unknown target owner (400), not a 500", async () => {
+    const a = await factory.owner({ name: "Alpha" });
+    const b = await factory.owner({ name: "Bravo" });
+    const unit = await factory.unit(a.id);
+    // The target owner is deleted between the existence check and the write.
+    const spy = vi.spyOn(prisma, "$transaction")
+      .mockRejectedValueOnce(Object.assign(new Error("fk"), { code: "P2003" }));
+    try {
+      const res = await assign(unit.id, { toOwnerId: b.id });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("toOwnerId does not reference an existing owner");
+    } finally {
+      spy.mockRestore();
+    }
+    expect((await unitOf(unit.id)).ownerId).toBe(a.id);
+    expect(await eventsOf(unit.id)).toHaveLength(0);
+  });
+});
+
+describe("Editing a unit's owner through PATCH /api/units/:id", () => {
+  const edit = (unitId, body, token) =>
+    request(app).patch(`/api/units/${unitId}`).set(auth(token)).send(body);
+
+  it("refuses a different ownerId for an officer and an admin (409): owner unchanged, no event written", async () => {
+    const a = await factory.owner({ name: "Alpha" });
+    const b = await factory.owner({ name: "Bravo" });
+    const unit = await factory.unit(a.id);
+
+    for (const token of [tokens.officer(), tokens.admin()]) {
+      const res = await edit(unit.id, { ownerId: b.id }, token);
+      expect(res.status).toBe(409);
+      expect(res.body.error).toBe("Use Reassign owner to move a unit to another owner");
+    }
+    expect((await unitOf(unit.id)).ownerId).toBe(a.id);
+    expect(await eventsOf(unit.id)).toHaveLength(0);
+  });
+
+  it("accepts the unchanged ownerId together with another field (the edit form re-sends it)", async () => {
+    const a = await factory.owner({ name: "Alpha" });
+    const unit = await factory.unit(a.id);
+
+    const res = await edit(unit.id, { ownerId: a.id, floor: "7" }, tokens.officer());
+    expect(res.status).toBe(200);
+    expect(res.body.floor).toBe("7");
+    const after = await unitOf(unit.id);
+    expect(after.floor).toBe("7");
+    expect(after.ownerId).toBe(a.id);
+    expect(await eventsOf(unit.id)).toHaveLength(0);
   });
 });

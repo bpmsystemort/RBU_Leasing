@@ -141,7 +141,7 @@ export async function commitWorkbook(buffer) {
     const u = await prisma.unit.findUnique({ where: { id: unitId }, select: { status: true, needsStatusReview: true, leases: { select: { startDate: true, endDate: true } } } });
     const active = u.leases.some((l) => l.startDate <= now && l.endDate >= now);
     if (active) {
-      if (u.status !== "OCCUPIED" || u.needsStatusReview) await prisma.unit.update({ where: { id: unitId }, data: { status: "OCCUPIED", needsStatusReview: false } });
+      if (u.status !== "OCCUPIED" || u.needsStatusReview) await prisma.unit.update({ where: { id: unitId }, data: { status: "OCCUPIED", needsStatusReview: false, blockedByTransactionId: null } });
     } else {
       if (!u.needsStatusReview) await prisma.unit.update({ where: { id: unitId }, data: { needsStatusReview: true } });
       summary.unitsFlagged++;

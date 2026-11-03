@@ -39,6 +39,8 @@ export async function reassignOwner(actor, unitId, { toOwnerId, reason }) {
     });
   } catch (e) {
     if (e?.code === "P2002") throw new ConflictError(`${target.name} already has a unit with the same unit key`);
+    // The target owner was deleted between the check above and the write.
+    if (e?.code === "P2003") throw new InvalidReferenceError("toOwnerId does not reference an existing owner");
     throw e;
   }
 }
