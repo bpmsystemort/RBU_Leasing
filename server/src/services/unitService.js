@@ -44,6 +44,7 @@ export async function createUnitForUser(user, data) {
   if (payload.baseRent == null) payload.baseRent = 0; // base rent lives on the lease
   if (user.role === "UNIT_OWNER") {
     payload.ownerId = user.unitOwnerId; // force own owner
+    delete payload.status;              // owners never set availability
   }
   // Every API-created unit enters the approval workflow — staff-created units are
   // no exception (they must be submitted and approved, not silently APPROVED).
@@ -177,12 +178,21 @@ export async function updateUnit(user, id, data) {
     fields.ownerId = user.unitOwnerId; // never let an owner reassign
     delete fields.approvalStatus;      // status changes only via submit/approve/reject
   }
-  if (fields.status !== undefined && fields.status !== unit.status) {
+  // Never re-write the status the unit already has: an echo must not clobber a
+  // concurrent pipeline change (e.g. BLOCKED) made since we read the row.
+  if (fields.status !== undefined && fields.status === unit.status) delete fields.status;
+  if (fields.status !== undefined) {
     assertManualChange(unit, fields.status);
     if (fields.status === "UNAVAILABLE") await assertNoActiveDeal(id);
   }
   if (fields.ownerId) await assertOwnerExists(fields.ownerId);
   if (fields.towerId) await assertTowerExists(fields.towerId);
+  if (fields.status !== undefined) {
+    // Conditional write: only succeeds while the status is still the one we checked.
+    const { count } = await prisma.unit.updateMany({ where: { id, status: unit.status }, data: fields });
+    if (count === 0) throw new ConflictError("Unit status changed; reload and try again");
+    return getUnit(id);
+  }
   return prisma.unit.update({ where: { id }, data: fields, include: withHierarchy });
 }
 

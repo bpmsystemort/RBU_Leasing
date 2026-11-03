@@ -118,6 +118,18 @@ describe("Manual availability (unavailable / restore)", () => {
     expect(res.body.status).toBe("UNAVAILABLE");
   });
 
+  it("a Signed (ended) deal does not prevent setting a unit unavailable", async () => {
+    const owner = await factory.owner();
+    const tenant = await factory.tenant();
+    const unit = await factory.unit(owner.id);
+    await makeTxn({ unitId: unit.id, tenantId: tenant.id, finalStatus: "Signed" });
+
+    const res = await patch(`${unit.id}/unavailable`, tokens.officer());
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe("UNAVAILABLE");
+    expect(await statusOf(unit.id)).toBe("UNAVAILABLE");
+  });
+
   it("the lessor-onboarding transaction (no inquiry, no tenant) does NOT block set-unavailable", async () => {
     const owner = await factory.owner();
     const unit = await factory.unit(owner.id);
@@ -158,6 +170,19 @@ describe("Manual availability (unavailable / restore)", () => {
     }
     expect(await statusOf(unit.id)).toBe("VACANT");
   });
+
+  it("is forbidden for a UNIT_OWNER and a TENANT (403 on all three routes)", async () => {
+    const owner = await factory.owner();
+    const tenant = await factory.tenant();
+    const unit = await factory.unit(owner.id);
+    for (const token of [tokens.owner(owner.id), tokens.tenant(tenant.id)]) {
+      for (const path of ["unavailable", "restore", "release-block"]) {
+        const res = await patch(`${unit.id}/${path}`, token);
+        expect(res.status).toBe(403);
+      }
+    }
+    expect(await statusOf(unit.id)).toBe("VACANT");
+  });
 });
 
 describe("PATCH /api/units/:id status", () => {
@@ -178,6 +203,15 @@ describe("PATCH /api/units/:id status", () => {
         .send({ ownerId: owner.id, unitNumber: "N1", baseRent: 1000, status });
       expect(res.status).toBe(400);
     }
+  });
+
+  it("a UNIT_OWNER creating a unit with status UNAVAILABLE gets a VACANT unit", async () => {
+    const owner = await factory.owner();
+    const res = await request(app).post("/api/units").set(auth(tokens.owner(owner.id)))
+      .send({ unitNumber: "S1", baseRent: 1000, status: "UNAVAILABLE" });
+    expect(res.status).toBe(201);
+    expect(res.body.status).toBe("VACANT");
+    expect(await statusOf(res.body.id)).toBe("VACANT");
   });
 
   it("allows UNAVAILABLE from VACANT (200) and VACANT back from UNAVAILABLE", async () => {
@@ -229,6 +263,45 @@ describe("PATCH /api/units/:id status", () => {
     const res = await patch(unit.id, tokens.officer()).send({ status: "UNAVAILABLE", floor: "3" });
     expect(res.status).toBe(200);
     expect(res.body.floor).toBe("3");
+    expect(await statusOf(unit.id)).toBe("UNAVAILABLE");
+  });
+
+  it("echoing the stored status (VACANT) with another field only changes that field", async () => {
+    const owner = await factory.owner();
+    const unit = await factory.unit(owner.id);
+    const res = await patch(unit.id, tokens.officer()).send({ status: "VACANT", floor: "9" });
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe("VACANT");
+    expect(res.body.floor).toBe("9");
+    expect(await statusOf(unit.id)).toBe("VACANT");
+  });
+
+  it("a BLOCKED unit keeps its status and holder pointer when PATCH asks for VACANT or UNAVAILABLE (409, other fields not applied)", async () => {
+    const owner = await factory.owner();
+    const tenant = await factory.tenant();
+    const txn = await makeTxn({ tenantId: tenant.id });
+    const unit = await factory.unit(owner.id, { status: "BLOCKED", blockedByTransactionId: txn.id });
+
+    for (const status of ["VACANT", "UNAVAILABLE"]) {
+      const res = await patch(unit.id, tokens.officer()).send({ status, floor: "9" });
+      expect(res.status).toBe(409);
+      const after = await prisma.unit.findUnique({ where: { id: unit.id } });
+      expect(after.status).toBe("BLOCKED");
+      expect(after.blockedByTransactionId).toBe(txn.id);
+      expect(after.floor).toBeNull();
+    }
+  });
+
+  it("a status change that passes the guards is applied together with the other fields", async () => {
+    const owner = await factory.owner();
+    const unit = await factory.unit(owner.id);
+    const res = await patch(unit.id, tokens.officer()).send({ status: "UNAVAILABLE", floor: "4" });
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe("UNAVAILABLE");
+    expect(res.body.floor).toBe("4");
+    const after = await prisma.unit.findUnique({ where: { id: unit.id } });
+    expect(after.status).toBe("UNAVAILABLE");
+    expect(after.floor).toBe("4");
   });
 
   it("a UNIT_OWNER cannot change status (it is ignored, the rest of the edit applies)", async () => {

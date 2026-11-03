@@ -156,12 +156,19 @@ export async function releaseUnitBlock(actor, unitId) {
   });
   if (count === 0) throw new ConflictError("Unit is not blocked");
   if (unit.blockedByTransactionId) {
-    await logEvent(unit.blockedByTransactionId, actor, "Unit block released");
+    // The unit is already released; a failed audit event must not fail the request.
+    try {
+      await logEvent(unit.blockedByTransactionId, actor, "Unit block released");
+    } catch (e) {
+      console.error("Unit block release event not logged:", e.message);
+    }
   }
-  return prisma.unit.findUnique({
+  const released = await prisma.unit.findUnique({
     where: { id: unitId },
     include: { tower: { include: { estate: true } }, owner: { select: { id: true, name: true } } },
   });
+  if (!released) throw new NotFoundError("Unit not found");
+  return released;
 }
 
 // Opens the onboarding transaction for a unit the lessor has registered
