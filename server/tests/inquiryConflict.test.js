@@ -4,7 +4,7 @@ import { createApp } from "../src/app.js";
 import { prisma } from "../src/lib/prisma.js";
 import { ConflictError } from "../src/lib/errors.js";
 import { resetCrudTables, tokens, factory } from "./helpers.js";
-import { assertUnitFreeForInquiry } from "../src/services/leasingTransactionService.js";
+import { assertUnitFreeForInquiry, ensureForInquiry } from "../src/services/leasingTransactionService.js";
 
 const app = createApp();
 beforeEach(async () => { await resetCrudTables(); });
@@ -193,7 +193,7 @@ describe("Two officers accepting two inquiries for one unit at once", () => {
   // and the loser then fails the unique constraint (surfacing as a 500, with no
   // transaction created for it). So this test asserts what is guaranteed, not
   // "exactly one winner".
-  it("leaves one transaction per successful acceptance and none for a refused one", async () => {
+  it("a concurrent acceptance never leaves a transaction for a request that did not succeed (known window: both may succeed)", async () => {
     const unit = await makeUnit();
     const a = await makeInquiry({ unitId: unit.id, fullName: "Prospect A", email: "a@example.com" });
     const b = await makeInquiry({ unitId: unit.id, fullName: "Prospect B", email: "b@example.com" });
@@ -258,5 +258,43 @@ describe("Deals that died before Contract Signing", () => {
     expect(res.status).toBe(409);
     expect(res.body.error).toBe(
       `Unit 9F already has an active deal (${rival.reference}) for another prospect; unlink the unit from that deal or close it first`);
+  });
+});
+
+describe("ensureForInquiry (the backstop behind the pre-check)", () => {
+  it("rejects with a ConflictError when a rival deal holds the unit, and creates nothing", async () => {
+    const unit = await makeUnit({ unitNumber: "3B" });
+    const rival = await makeDeal(unit.id);
+    const second = await makeInquiry({ unitId: unit.id });
+    const { user } = await makeOfficer();
+
+    const err = await ensureForInquiry(second, { userId: user.id, role: "LEASING_OFFICER" }).catch((e) => e);
+    expect(err).toBeInstanceOf(ConflictError);
+    expect(err.message).toContain(rival.reference);
+    expect(err.message).toContain("3B");
+    expect(await prisma.leasingTransaction.findUnique({ where: { inquiryId: second.id } })).toBeNull();
+    expect(await dealsOn(unit.id)).toBe(1);
+  });
+
+  it("returns the inquiry's own existing transaction without complaining about other deals", async () => {
+    const unit = await makeUnit();
+    const inq = await makeInquiry({ unitId: unit.id });
+    const own = await makeTxn({ unitId: unit.id, inquiryId: inq.id });
+    await makeDeal(unit.id);
+    const { user } = await makeOfficer();
+
+    const txn = await ensureForInquiry(inq, { userId: user.id, role: "LEASING_OFFICER" });
+    expect(txn.id).toBe(own.id);
+  });
+
+  it("creates the transaction when nothing else holds the unit", async () => {
+    const unit = await makeUnit();
+    const inq = await makeInquiry({ unitId: unit.id });
+    const { user } = await makeOfficer();
+
+    const txn = await ensureForInquiry(inq, { userId: user.id, role: "LEASING_OFFICER" });
+    expect(txn.inquiryId).toBe(inq.id);
+    expect(txn.unitId).toBe(unit.id);
+    expect(await dealsOn(unit.id)).toBe(1);
   });
 });

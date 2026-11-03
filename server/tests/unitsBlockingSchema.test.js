@@ -49,7 +49,7 @@ describe("Units & Blocking schema", () => {
     const other = await factory.owner({ name: "Other" });
     const unit = await factory.unit(owner.id);
     await prisma.unitAssignmentEvent.create({ data: { unitId: unit.id, toOwnerId: other.id } });
-    await expect(prisma.unitOwner.delete({ where: { id: other.id } })).rejects.toThrow();
+    await expect(prisma.unitOwner.delete({ where: { id: other.id } })).rejects.toMatchObject({ code: "P2003" });
     expect(await prisma.unitOwner.count({ where: { id: other.id } })).toBe(1);
   });
 });

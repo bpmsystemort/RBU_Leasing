@@ -43,8 +43,10 @@ describe("Reassigning a unit to another owner", () => {
     const a = await factory.owner({ name: "Alpha" });
     const b = await factory.owner({ name: "Bravo" });
     const unit = await factory.unit(a.id);
+    // Stored as VIEWER (resetCrudTables removes every non-ADMIN user, so a killed run
+    // self-heals); the token still carries role ADMIN, which is what the route checks.
     const admin = await prisma.user.create({
-      data: { name: "Real Admin", email: "real-admin@x.com", passwordHash: "x", role: "ADMIN" },
+      data: { name: "Real Admin", email: "real-admin@x.com", passwordHash: "x", role: "VIEWER" },
     });
     try {
       const token = issueToken({ id: admin.id, role: "ADMIN" });
@@ -209,6 +211,9 @@ describe("Reassigning a unit to another owner", () => {
     expect(events).toHaveLength(wins);
     // No orphan: the newest event is exactly the move that produced the final owner.
     expect(events[events.length - 1].toOwnerId).toBe(finalOwner);
+    // The history is one unbroken chain starting at the original owner.
+    expect(events[0].fromOwnerId).toBe(a.id);
+    if (wins === 2) expect(events[1].fromOwnerId).toBe(events[0].toOwnerId);
   });
 });
 
