@@ -121,6 +121,16 @@ describe("commitWorkbook", () => {
     expect(u2.needsStatusReview).toBe(false);
     expect(u2.status).toBe("OCCUPIED");
   });
+  it("does not flag a unit staff already marked VACANT when the same file is imported again", async () => {
+    const buf = await wbuf([R({ unit: "6D", ...PAST })]);
+    await commitWorkbook(buf);
+    const unit = await prisma.unit.findFirstOrThrow({ where: { unitNumber: "6D" } });
+    await prisma.unit.update({ where: { id: unit.id }, data: { status: "VACANT", needsStatusReview: false } });
+
+    await commitWorkbook(buf);
+
+    expect(await prisma.unit.findUnique({ where: { id: unit.id } })).toMatchObject({ status: "VACANT", needsStatusReview: false });
+  });
   it("collapses short/long building spellings of the same tower into one unit", async () => {
     // towerNameFor maps both "Ibiza" (2023/2024 short form) and "CV Ibiza Tower"
     // (2025/2026 full form) to the same seeded "Ibiza Tower" -> same tower id ->

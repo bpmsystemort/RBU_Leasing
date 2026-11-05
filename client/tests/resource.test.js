@@ -111,6 +111,12 @@ describe("unit availability, ownership and blocking clients", () => {
     expect(res).toEqual({ id: "3" });
   });
 
+  it("units.markVacant PATCHes the mark-vacant path and returns the unit", async () => {
+    const res = await units.markVacant("u1");
+    expect(api.patch).toHaveBeenCalledWith("/units/u1/mark-vacant");
+    expect(res).toEqual({ id: "3" });
+  });
+
   it("leasingTransactions.blockUnit / unblockUnit PATCH the block and unblock paths", async () => {
     await leasingTransactions.blockUnit("t1");
     expect(api.patch).toHaveBeenCalledWith("/leasing-transactions/t1/block");

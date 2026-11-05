@@ -16,6 +16,7 @@ vi.mock("../src/lib/resource.js", () => ({
     restore: vi.fn(() => Promise.resolve()),
     releaseBlock: vi.fn(() => Promise.resolve()),
     markReviewed: vi.fn(() => Promise.resolve({})),
+    markVacant: vi.fn(() => Promise.resolve({})),
   },
   estates: {
     list: vi.fn(() => Promise.resolve([
@@ -142,6 +143,7 @@ describe("UnitsView console", () => {
     units.restore.mockClear();
     units.releaseBlock.mockClear();
     units.markReviewed.mockClear();
+    units.markVacant.mockClear();
   });
 
   it("search narrows rows by unit number, owner name and tower name, case-insensitively", async () => {
@@ -384,7 +386,7 @@ describe("UnitsView console", () => {
     const rows = w.findAll("tbody tr");
     expect(rows[0].findAll("button").map((b) => b.text())).toEqual(["Set unavailable", "Mark reviewed"]);
     expect(rows[1].findAll("button").map((b) => b.text())).toEqual(["Set unavailable"]);
-    expect(rows[2].findAll("button").map((b) => b.text())).toEqual(["Mark reviewed"]);
+    expect(rows[2].findAll("button").map((b) => b.text())).toEqual(["Mark vacant", "Mark reviewed"]);
 
     const viewer = await mountWith("VIEWER", data);
     expect(viewer.find(".avail-reviewed").exists()).toBe(false);
@@ -403,6 +405,46 @@ describe("UnitsView console", () => {
     expect(units.list.mock.calls.length).toBe(before + 1);
     expect(w.find(".avail-reviewed").exists()).toBe(false);
     expect(w.find(".review-tag").exists()).toBe(false);
+  });
+
+  it("shows Mark vacant only on flagged OCCUPIED rows, and only to a write role", async () => {
+    const data = [
+      mkUnit(1, { status: "OCCUPIED", needsStatusReview: true }),
+      mkUnit(2, { status: "OCCUPIED", needsStatusReview: false }),
+      mkUnit(3, { status: "VACANT", needsStatusReview: true }),
+    ];
+    const w = await mountWith("LEASING_OFFICER", data);
+    const rows = w.findAll("tbody tr");
+    expect(rows[0].find(".avail-vacant").exists()).toBe(true);
+    expect(rows[1].find(".avail-vacant").exists()).toBe(false);
+    expect(rows[2].find(".avail-vacant").exists()).toBe(false);
+
+    const viewer = await mountWith("VIEWER", data);
+    expect(viewer.text()).not.toContain("Mark vacant");
+  });
+
+  it("Mark vacant calls the client with the unit id, then reloads the list", async () => {
+    const w = await mountWith("LEASING_OFFICER", [mkUnit(1, { status: "OCCUPIED", needsStatusReview: true })]);
+    units.list.mockImplementationOnce(() => Promise.resolve([mkUnit(1, { status: "VACANT", needsStatusReview: false })]));
+    const before = units.list.mock.calls.length;
+    await w.find(".avail-vacant").trigger("click");
+    await flushPromises();
+    expect(units.markVacant).toHaveBeenCalledWith("p1");
+    expect(units.list.mock.calls.length).toBe(before + 1);
+    expect(w.find(".avail-vacant").exists()).toBe(false);
+    expect(w.find(".review-tag").exists()).toBe(false);
+  });
+
+  it("shows the server's error when Mark vacant is refused, without reloading", async () => {
+    const w = await mountWith("LEASING_OFFICER", [mkUnit(1, { status: "OCCUPIED", needsStatusReview: true })]);
+    units.markVacant.mockImplementationOnce(() =>
+      Promise.reject({ response: { data: { error: "Unit has a current lease; it cannot be marked vacant" } } }),
+    );
+    const before = units.list.mock.calls.length;
+    await w.find(".avail-vacant").trigger("click");
+    await flushPromises();
+    expect(w.find(".action-error").text()).toBe("Unit has a current lease; it cannot be marked vacant");
+    expect(units.list.mock.calls.length).toBe(before);
   });
 
   it("shows the server's error when Mark reviewed is refused, without reloading", async () => {

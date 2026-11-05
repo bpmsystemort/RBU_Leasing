@@ -193,6 +193,7 @@ const setUnavailable = (row) => runAction(row, () => units.setUnavailable(row.id
 const restore = (row) => runAction(row, () => units.restore(row.id));
 const releaseBlock = (row) => runAction(row, () => units.releaseBlock(row.id));
 const markReviewed = (row) => runAction(row, () => units.markReviewed(row.id));
+const markVacant = (row) => runAction(row, () => units.markVacant(row.id));
 
 function approvalLabel(value) {
   return value ? value.charAt(0) + value.slice(1).toLowerCase() : "—";
@@ -292,6 +293,13 @@ function remove(row) {
               @click="releaseBlock(row)"
             >Release block</button>
             <span v-else-if="row.status === 'BLOCKED'" class="avail-held muted">Held by a deal</span>
+            <button
+              v-if="row.needsStatusReview && row.status === 'OCCUPIED'"
+              type="button"
+              class="avail-vacant"
+              :disabled="busyId === row.id"
+              @click="markVacant(row)"
+            >Mark vacant</button>
             <button
               v-if="row.needsStatusReview"
               type="button"

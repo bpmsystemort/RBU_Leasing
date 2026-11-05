@@ -518,3 +518,71 @@ describe("PATCH /api/units/:id/mark-reviewed", () => {
     expect((await patch("ghost/mark-reviewed", tokens.officer())).status).toBe(404);
   });
 });
+
+describe("PATCH /api/units/:id/mark-vacant", () => {
+  const ended = { startDate: new Date("2020-01-01"), endDate: new Date("2021-01-01") };
+  const current = { startDate: new Date("2020-01-01"), endDate: new Date("2099-01-01") };
+  const flagged = async ({ status = "OCCUPIED", flag = true, leases = [ended] } = {}) => {
+    const owner = await factory.owner();
+    const tenant = await factory.tenant();
+    const unit = await factory.unit(owner.id, { status });
+    for (const l of leases) await factory.lease(unit.id, tenant.id, l);
+    await prisma.unit.update({ where: { id: unit.id }, data: { needsStatusReview: flag } });
+    return { owner, unit };
+  };
+  const rowOf = (id) => prisma.unit.findUnique({ where: { id } });
+
+  it("sets a flagged OCCUPIED unit with no current lease to VACANT and clears the flag", async () => {
+    const { unit } = await flagged();
+
+    const res = await patch(`${unit.id}/mark-vacant`, tokens.officer());
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ id: unit.id, status: "VACANT", needsStatusReview: false });
+    expect(res.body.owner).toHaveProperty("needsReview");
+    expect(await rowOf(unit.id)).toMatchObject({ status: "VACANT", needsStatusReview: false });
+  });
+
+  it("works for an admin, and for a unit with no lease at all", async () => {
+    const { unit } = await flagged({ leases: [] });
+    expect((await patch(`${unit.id}/mark-vacant`, tokens.admin())).status).toBe(200);
+    expect(await statusOf(unit.id)).toBe("VACANT");
+  });
+
+  it("refuses a unit that still has a current lease (409) and changes nothing", async () => {
+    const { unit } = await flagged({ leases: [ended, current] });
+
+    const res = await patch(`${unit.id}/mark-vacant`, tokens.officer());
+    expect(res.status).toBe(409);
+    expect(res.body.error).toMatch(/current lease/i);
+    expect(await rowOf(unit.id)).toMatchObject({ status: "OCCUPIED", needsStatusReview: true });
+  });
+
+  it("refuses a unit that is not flagged for review (409)", async () => {
+    const { unit } = await flagged({ flag: false });
+    const res = await patch(`${unit.id}/mark-vacant`, tokens.officer());
+    expect(res.status).toBe(409);
+    expect(res.body.error).toMatch(/not flagged/i);
+    expect(await statusOf(unit.id)).toBe("OCCUPIED");
+  });
+
+  it("refuses a flagged unit that is not OCCUPIED (409)", async () => {
+    for (const status of ["VACANT", "UNAVAILABLE", "BLOCKED"]) {
+      const { unit } = await flagged({ status });
+      expect((await patch(`${unit.id}/mark-vacant`, tokens.officer())).status).toBe(409);
+      expect(await statusOf(unit.id)).toBe(status);
+    }
+  });
+
+  it("is forbidden for viewer, unit owner and tenant (403)", async () => {
+    const { owner, unit } = await flagged();
+    const tenant = await factory.tenant();
+    for (const token of [tokens.viewer(), tokens.owner(owner.id), tokens.tenant(tenant.id)]) {
+      expect((await patch(`${unit.id}/mark-vacant`, token)).status).toBe(403);
+    }
+    expect(await statusOf(unit.id)).toBe("OCCUPIED");
+  });
+
+  it("returns 404 for an unknown unit", async () => {
+    expect((await patch("ghost/mark-vacant", tokens.officer())).status).toBe(404);
+  });
+});

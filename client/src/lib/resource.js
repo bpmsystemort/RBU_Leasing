@@ -26,6 +26,8 @@ units.restore = (id) => api.patch(`/units/${id}/restore`).then((r) => r.data);
 units.releaseBlock = (id) => api.patch(`/units/${id}/release-block`).then((r) => r.data);
 // Clears the "needs status review" flag import v2 puts on a unit; returns the unit.
 units.markReviewed = (id) => api.patch(`/units/${id}/mark-reviewed`).then((r) => r.data);
+// A flagged OCCUPIED unit with no current lease is empty: set it VACANT (and clear the flag).
+units.markVacant = (id) => api.patch(`/units/${id}/mark-vacant`).then((r) => r.data);
 units.assignOwner = (id, { toOwnerId, reason }) =>
   api.patch(`/units/${id}/assign-owner`, { toOwnerId, reason }).then((r) => r.data);
 units.assignments = (id) => api.get(`/units/${id}/assignments`).then((r) => r.data);

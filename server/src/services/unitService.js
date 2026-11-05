@@ -171,6 +171,23 @@ export async function restoreUnit(user, id) {
   return changeAvailability(id, "UNAVAILABLE", "VACANT");
 }
 
+// Staff's decision on an imported unit whose leases have all ended: it is empty,
+// so make it available. Import never does this itself (an ended lease does not
+// prove the unit is empty); only a flagged OCCUPIED unit with no current lease
+// qualifies, and the write is pinned to that state so a concurrent change is a 409.
+export async function markVacant(user, id) {
+  const unit = await getUnit(id);
+  if (!unit.needsStatusReview) throw new ConflictError("Unit is not flagged for status review");
+  if (unit.status !== "OCCUPIED") throw new ConflictError(`Only an OCCUPIED unit can be marked vacant; this one is ${unit.status}`);
+  const now = new Date();
+  if (await prisma.lease.findFirst({ where: { unitId: id, startDate: { lte: now }, endDate: { gte: now } }, select: { id: true } })) {
+    throw new ConflictError("Unit has a current lease; it cannot be marked vacant");
+  }
+  const { count } = await prisma.unit.updateMany({ where: { id, status: "OCCUPIED", needsStatusReview: true }, data: { status: "VACANT", needsStatusReview: false } });
+  if (count === 0) throw new ConflictError("Unit status changed; reload and try again");
+  return prisma.unit.findUnique({ where: { id }, include: includeFor(user) });
+}
+
 export async function updateUnit(user, id, data) {
   const unit = await getUnit(id);
   const { submit, ...fields } = data;

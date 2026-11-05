@@ -49,6 +49,9 @@ export async function releaseBlock(req, res, next) {
 export async function markReviewed(req, res, next) {
   try { res.json(await service.markReviewed(req.user, req.params.id)); } catch (e) { next(e); }
 }
+export async function markVacant(req, res, next) {
+  try { res.json(await service.markVacant(req.user, req.params.id)); } catch (e) { next(e); }
+}
 export async function assignOwner(req, res, next) {
   try {
     const data = assignOwnerSchema.parse(req.body);
