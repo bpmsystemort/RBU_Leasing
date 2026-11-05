@@ -87,6 +87,47 @@ describe("analyzeWorkbook (preview parity with commit)", () => {
   });
 });
 
+describe("analyzeWorkbook review details (what the counts refer to)", () => {
+  it("lists each unit needing status review with its owner, last lessee and last end date", async () => {
+    const buf = await wbuf([
+      R({ unit: "6D", lessor: "Owner A", lessee: "Old Tenant", start: new Date("2021-01-01"), end: new Date("2021-12-31") }),
+      R({ unit: "6D", lessor: "Owner A", lessee: "Newer Tenant", ...PAST }),
+      R({ unit: "9Z", lessor: "Owner B", ...ACTIVE }), // has a current lease: not listed
+    ]);
+    const res = await analyzeWorkbook(buf);
+    expect(res.unitsNeedingStatusReview).toBe(1);
+    expect(res.unitReviews).toEqual([{
+      property: "CV Ibiza Tower", unitNumber: "6D", owner: "Owner A",
+      lastLessee: "Newer Tenant", lastEnd: "2022-12-31", leases: 2, sheet: "2026", row: 3, existing: false,
+    }]);
+  });
+  it("lists the owners flagged for review with why, and how many units they own in the file", async () => {
+    const buf = await wbuf([
+      R({ unit: "6D", lessor: "Spouses Juan and Maria Cruz", ...ACTIVE }),
+      R({ unit: "7D", lessor: "Spouses Juan and Maria Cruz", ...ACTIVE }),
+      R({ unit: "8D", lessor: null, ...ACTIVE }),
+      R({ unit: "9D", lessor: "Owner A", ...ACTIVE }), // clean name: not listed
+    ]);
+    const res = await analyzeWorkbook(buf);
+    expect(res.ownersNeedingReview).toBe(2);
+    expect(res.ownerReviews).toEqual([
+      { owner: "Spouses Juan and Maria Cruz", reason: "Joint or multiple owners in one name", units: 2, sheet: "2026", row: 2 },
+      { owner: "Unknown Owner", reason: "No lessor given", units: 1, sheet: "2026", row: 4 },
+    ]);
+  });
+  it("marks a listed unit as existing when it is already in the database, and counts its DB leases' end", async () => {
+    await commitWorkbook(await wbuf([R({ unit: "6D", lessor: "Owner A", lessee: "First", ...PAST })]));
+    const res = await analyzeWorkbook(await wbuf([R({ unit: "6D", lessor: "Owner A", lessee: "Second", start: new Date("2020-01-01"), end: new Date("2020-12-31") })]));
+    expect(res.unitReviews).toHaveLength(1);
+    expect(res.unitReviews[0]).toMatchObject({ unitNumber: "6D", existing: true, lastLessee: "Second", lastEnd: "2022-12-31" });
+  });
+  it("returns empty lists when nothing is flagged", async () => {
+    const res = await analyzeWorkbook(await wbuf([R({ ...ACTIVE })]));
+    expect(res.unitReviews).toEqual([]);
+    expect(res.ownerReviews).toEqual([]);
+  });
+});
+
 describe("commitWorkbook", () => {
   it("creates owners/units/leases, never a User, idempotent on re-run", async () => {
     const buf = await wbuf([R(), R({ unit: "7D" })]);

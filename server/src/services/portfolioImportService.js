@@ -5,6 +5,8 @@ import { parseFromBuffer } from "../lib/importParse.js";
 
 const JOINT = /\b and \b|&|\bspouses?\b|\/|\bc\/o\b|\bet al\b/i;
 const ownerNeedsReview = (name) => !name || JOINT.test(name);
+const ownerReviewReason = (name) => (name ? "Joint or multiple owners in one name" : "No lessor given");
+const isoDay = (d) => d.toISOString().slice(0, 10);
 
 function unitKeyOf(property, unitNumber, towerId) {
   // When a tower resolves, key on the tower (not the raw building text) so short/long
@@ -43,7 +45,7 @@ export async function analyzeWorkbook(buffer) {
   const now = new Date();
   const totals = { willCreate: 0, willUpdate: 0, skipped: 0, failed: 0 };
   const failures = [];
-  const ownerReviewKeys = new Set();
+  const ownerReviews = new Map(); // ownerKey -> what the preview table shows for a flagged owner
   const seen = new Set();
   const ownerIdByKey = new Map();
   async function resolveOwnerId(nameKey) {
@@ -57,7 +59,11 @@ export async function analyzeWorkbook(buffer) {
     if (c.kind === "skip") { totals.skipped++; continue; }
     if (c.kind === "fail") { totals.failed++; failures.push({ sheet: row.sheet, row: row.row, reasons: c.reasons }); continue; }
     const ownerKey = key(row.lessor || "Unknown Owner");
-    if (ownerNeedsReview(row.lessor)) ownerReviewKeys.add(ownerKey);
+    if (ownerNeedsReview(row.lessor)) {
+      const o = ownerReviews.get(ownerKey) ?? { owner: row.lessor || "Unknown Owner", reason: ownerReviewReason(row.lessor), unitKeys: new Set(), sheet: row.sheet, row: row.row };
+      o.unitKeys.add(`${key(row.property)}|${key(row.unitNumber)}`);
+      ownerReviews.set(ownerKey, o);
+    }
     const ownerId = await resolveOwnerId(ownerKey);
     const towerId = towerByName.get(towerNameFor(row.property)) ?? null;
     const unitKey = unitKeyOf(row.property, row.unitNumber, towerId);
@@ -70,10 +76,11 @@ export async function analyzeWorkbook(buffer) {
     if (existingLease) totals.willUpdate++; else totals.willCreate++;
     const gKey = `${ownerId ?? "NEW:" + ownerKey}|${unitKey}`;
     let g = unitGroups.get(gKey);
-    if (!g) { g = { existingUnitId, periods: [] }; unitGroups.set(gKey, g); }
+    if (!g) { g = { existingUnitId, periods: [], leases: [], property: row.property, unitNumber: row.unitNumber, owner: row.lessor || "Unknown Owner" }; unitGroups.set(gKey, g); }
     g.periods.push([row.startDate, row.endDate]);
+    g.leases.push({ lessee: row.lessee, end: row.endDate, sheet: row.sheet, row: row.row });
   }
-  let unitsNeedingStatusReview = 0;
+  const unitReviews = [];
   for (const g of unitGroups.values()) {
     const periods = [...g.periods];
     if (g.existingUnitId) {
@@ -81,9 +88,13 @@ export async function analyzeWorkbook(buffer) {
       const dbLeases = await prisma.lease.findMany({ where: { unitId: g.existingUnitId }, select: { startDate: true, endDate: true } });
       for (const l of dbLeases) periods.push([l.startDate, l.endDate]);
     }
-    if (!periods.some(([s, e]) => s <= now && e >= now)) unitsNeedingStatusReview++;
+    if (periods.some(([s, e]) => s <= now && e >= now)) continue;
+    const last = g.leases.reduce((a, b) => (b.end > a.end ? b : a));
+    const lastEnd = periods.reduce((a, [, e]) => (e > a ? e : a), last.end);
+    unitReviews.push({ property: g.property, unitNumber: g.unitNumber, owner: g.owner, lastLessee: last.lessee, lastEnd: isoDay(lastEnd), leases: periods.length, sheet: last.sheet, row: last.row, existing: !!g.existingUnitId });
   }
-  return { totals, sheets: sheetMeta, failures, ownersNeedingReview: ownerReviewKeys.size, unitsNeedingStatusReview };
+  const ownerReviewList = [...ownerReviews.values()].map(({ unitKeys, ...o }) => ({ ...o, units: unitKeys.size }));
+  return { totals, sheets: sheetMeta, failures, ownersNeedingReview: ownerReviewList.length, unitsNeedingStatusReview: unitReviews.length, ownerReviews: ownerReviewList, unitReviews };
 }
 
 export async function commitWorkbook(buffer) {

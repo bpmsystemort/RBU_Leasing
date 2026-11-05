@@ -3,6 +3,11 @@ import { ref, computed } from "vue";
 import { portfolioImport } from "../lib/resource.js";
 const file = ref(null); const busy = ref(false); const error = ref("");
 const preview = ref(null); const result = ref(null);
+const fmtDay = (iso) => new Date(`${iso}T00:00:00Z`).toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric", timeZone: "UTC" });
+const source = (r) => `${r.sheet} · row ${r.row}`;
+// Oldest last lease first: those are the units most likely to be empty.
+const unitReviews = computed(() => [...(preview.value?.unitReviews ?? [])].sort((a, b) => a.lastEnd.localeCompare(b.lastEnd)));
+const ownerReviews = computed(() => preview.value?.ownerReviews ?? []);
 const canPreview = computed(() => !!file.value && !busy.value);
 function onPick(e) { file.value = e.target.files?.[0] || null; preview.value = null; result.value = null; error.value = ""; }
 async function runPreview() {
@@ -44,6 +49,24 @@ async function confirm() {
       <ul v-if="preview.sheets?.some(s => !s.ok)" class="sheets">
         <li v-for="s in preview.sheets.filter(s => !s.ok)" :key="s.name" class="error">Sheet {{ s.name }}: {{ s.error }}</li>
       </ul>
+      <details v-if="unitReviews.length" class="review" open><summary>{{ unitReviews.length }} unit(s) need status review</summary>
+        <p class="muted small">No lease covers today. They will be imported as Occupied; an officer can mark the empty ones vacant on the Units page afterwards.</p>
+        <div class="scroll"><table class="unit-reviews">
+          <thead><tr><th>Tower</th><th>Unit</th><th>Owner</th><th>Last lessee</th><th>Last lease ended</th><th>Leases</th><th>Source</th></tr></thead>
+          <tbody><tr v-for="u in unitReviews" :key="`${u.property}|${u.unitNumber}|${u.owner}`">
+            <td>{{ u.property || "—" }}</td><td>{{ u.unitNumber }}</td><td>{{ u.owner }}</td><td>{{ u.lastLessee }}</td>
+            <td class="nowrap">{{ fmtDay(u.lastEnd) }}</td><td>{{ u.leases }}</td><td class="nowrap">{{ source(u) }}</td>
+          </tr></tbody>
+        </table></div>
+      </details>
+      <details v-if="ownerReviews.length" class="review" open><summary>{{ ownerReviews.length }} owner(s) flagged for review</summary>
+        <div class="scroll"><table class="owner-reviews">
+          <thead><tr><th>Owner</th><th>Why</th><th>Units</th><th>Source</th></tr></thead>
+          <tbody><tr v-for="o in ownerReviews" :key="o.owner">
+            <td>{{ o.owner }}</td><td>{{ o.reason }}</td><td>{{ o.units }}</td><td class="nowrap">{{ source(o) }}</td>
+          </tr></tbody>
+        </table></div>
+      </details>
       <details v-if="preview.failures?.length" open><summary>{{ preview.failures.length }} failed row(s)</summary>
         <ul><li v-for="(f,i) in preview.failures.slice(0,50)" :key="i">sheet {{ f.sheet }}, row {{ f.row }} — {{ f.reasons.join("; ") }}</li></ul>
       </details>
@@ -66,6 +89,8 @@ async function confirm() {
   </section>
 </template>
 <style scoped>
+.review { margin-top: 0.8rem; } .review summary { cursor: pointer; font-weight: 600; }
+.scroll { max-height: 22rem; overflow: auto; margin-top: 0.4rem; } .nowrap { white-space: nowrap; }
 .muted { color: var(--muted); } .small { font-size: 0.82rem; }
 .panel { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 1.25rem; box-shadow: var(--shadow-sm); margin-top: 1rem; }
 .panel__label { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--muted); font-weight: 700; margin-bottom: 0.6rem; }
