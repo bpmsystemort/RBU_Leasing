@@ -118,10 +118,13 @@ build in `14127e7`). Plan: `docs/superpowers/plans/2026-10-30-units-blocking.md`
    the preview skip reviewed units until a current lease has come and gone. Migration
    `2026-11-06-unit-status-reviewed.sql` (also backfills units reviewed before the column existed) is
    applied to the sandbox and test DBs.
-2. **Reconcile with `master`.** Merge `origin/master` (one small commit) into the branch. Squash
-   Phase 1a history first if that line is part of what is pushed: earlier commits contain real
-   names, and `ops/environments.md` / `docs/lessee-simulation-guide.md` contain Windows
-   username paths (see the SDD ledger).
+2. **Reconcile with `master`.** Done 2026-11-06: `origin/master` (one small commit) is merged in. The
+   history was also scrubbed before any push (a lessor's real name and one Windows-username path
+   removed from the branch's commits; hashes changed, authorship and commit count did not). The
+   pre-scrub branch is kept locally as `backup/sp2-before-scrub`; delete it once the PR is up. The
+   squash warning in the SDD ledger is about the separate Phase 1a line (`feature/leasing-mvp-phase-1a`),
+   not this branch. Windows-username paths in `docs/lessee-simulation-guide.md`,
+   `server/scripts/import-portfolio.js` and the Phase-07 plan are already on `origin/master`.
 3. **Apply the manual SQL to every DB** (dev, test, prod), then `npx prisma generate`:
    `2026-10-27-clear-readable-passwords.sql`, `2026-10-29-import-review-flags.sql`,
    `2026-10-30-email-settings.sql`, `2026-10-30-owner-accounts.sql`,
@@ -217,7 +220,7 @@ Work on one machine at a time: commit + push there, pull on the other before wor
 
 ## 8. Open items
 - [ ] Smoke-test the import → review → Mark vacant flow on real data.
-- [x] Merge `origin/master` into the branch (done 2026-11-06, clean, `6ad741a`). Still open: squash Phase 1a history if it is being pushed.
+- [x] Merge `origin/master` into the branch (done 2026-11-06, clean) and scrub the history (done; backup branch `backup/sp2-before-scrub`).
 - [ ] Apply the manual SQL (§4.3) to dev, test and prod.
 - [ ] Push `sp2/units-blocking` and open the PR; deploy.
 - [ ] Build SP3, SP4, SP5.
