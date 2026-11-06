@@ -483,6 +483,7 @@ describe("PATCH /api/units/:id/mark-reviewed", () => {
     expect(res.body.status).toBe("OCCUPIED");
     expect(res.body.owner).toMatchObject({ id: unit.ownerId });
     expect(await flagOf(unit.id)).toBe(false);
+    expect((await prisma.unit.findUnique({ where: { id: unit.id } })).statusReviewedAt).toBeInstanceOf(Date); // so a re-import leaves it alone
     expect(await statusOf(unit.id)).toBe("OCCUPIED");
   });
 

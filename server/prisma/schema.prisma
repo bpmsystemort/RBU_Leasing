@@ -225,6 +225,9 @@ model Unit {
   approvalStatus UnitApprovalStatus @default(APPROVED)
   reviewRemarks  String?
   needsStatusReview Boolean @default(false)
+  // When staff said "the status is right" to an import flag; the importer will not raise it
+  // again until a current lease has come and gone. See manual-migrations/2026-11-06-unit-status-reviewed.sql.
+  statusReviewedAt DateTime?
   // The transaction currently holding this unit in BLOCKED status; cleared
   // (SetNull) if that transaction is deleted. See manual-migrations/2026-11-03-units-blocking-2-block-and-assignments.sql.
   blockedByTransactionId String?

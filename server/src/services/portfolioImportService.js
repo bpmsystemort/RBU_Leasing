@@ -84,7 +84,8 @@ export async function analyzeWorkbook(buffer) {
   for (const g of unitGroups.values()) {
     const periods = [...g.periods];
     if (g.existingUnitId) {
-      if ((await prisma.unit.findUnique({ where: { id: g.existingUnitId }, select: { status: true } }))?.status === "VACANT") continue;
+      const known = await prisma.unit.findUnique({ where: { id: g.existingUnitId }, select: { status: true, statusReviewedAt: true } });
+      if (known?.status === "VACANT" || known?.statusReviewedAt) continue; // staff already decided this one
       const dbLeases = await prisma.lease.findMany({ where: { unitId: g.existingUnitId }, select: { startDate: true, endDate: true } });
       for (const l of dbLeases) periods.push([l.startDate, l.endDate]);
     }
@@ -150,11 +151,12 @@ export async function commitWorkbook(buffer) {
   // Status pass: never auto-VACANT. Active lease (now within [start,end]) -> OCCUPIED; else flag for review (unless staff already made it VACANT).
   const now = new Date();
   for (const unitId of affectedUnitIds) {
-    const u = await prisma.unit.findUnique({ where: { id: unitId }, select: { status: true, needsStatusReview: true, leases: { select: { startDate: true, endDate: true } } } });
+    const u = await prisma.unit.findUnique({ where: { id: unitId }, select: { status: true, needsStatusReview: true, statusReviewedAt: true, leases: { select: { startDate: true, endDate: true } } } });
     const active = u.leases.some((l) => l.startDate <= now && l.endDate >= now);
     if (active) {
-      if (u.status !== "OCCUPIED" || u.needsStatusReview) await prisma.unit.update({ where: { id: unitId }, data: { status: "OCCUPIED", needsStatusReview: false, blockedByTransactionId: null } });
-    } else if (u.status !== "VACANT") { // staff already decided a VACANT unit is empty; don't ask again
+      // A current lease settles the question; if it lapses later, ask again.
+      if (u.status !== "OCCUPIED" || u.needsStatusReview || u.statusReviewedAt) await prisma.unit.update({ where: { id: unitId }, data: { status: "OCCUPIED", needsStatusReview: false, statusReviewedAt: null, blockedByTransactionId: null } });
+    } else if (u.status !== "VACANT" && !u.statusReviewedAt) { // staff already decided (VACANT, or reviewed as is); don't ask again
       if (!u.needsStatusReview) await prisma.unit.update({ where: { id: unitId }, data: { needsStatusReview: true } });
       summary.unitsFlagged++;
     }

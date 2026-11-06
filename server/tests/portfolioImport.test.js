@@ -5,6 +5,7 @@ import { resetCrudTables, tokens } from "./helpers.js";
 import { prisma } from "../src/lib/prisma.js";
 import { createApp } from "../src/app.js";
 import { analyzeWorkbook, commitWorkbook } from "../src/services/portfolioImportService.js";
+import { markReviewed } from "../src/services/unitService.js";
 
 const require = createRequire(import.meta.url);
 const ExcelJS = require("exceljs");
@@ -171,6 +172,32 @@ describe("commitWorkbook", () => {
     await commitWorkbook(buf);
 
     expect(await prisma.unit.findUnique({ where: { id: unit.id } })).toMatchObject({ status: "VACANT", needsStatusReview: false });
+  });
+  it("does not flag a unit staff marked reviewed when the same file is imported again", async () => {
+    const buf = await wbuf([R({ unit: "6D", ...PAST })]);
+    await commitWorkbook(buf);
+    const unit = await prisma.unit.findFirstOrThrow({ where: { unitNumber: "6D" } });
+    await markReviewed({ role: "ADMIN" }, unit.id);
+
+    expect((await analyzeWorkbook(buf)).unitsNeedingStatusReview).toBe(0);
+    const summary = await commitWorkbook(buf);
+
+    expect(await prisma.unit.findUnique({ where: { id: unit.id } })).toMatchObject({ status: "OCCUPIED", needsStatusReview: false });
+    expect(summary.unitsFlagged).toBe(0);
+  });
+  it("asks again about a reviewed unit once an active lease has come and gone", async () => {
+    const past = await wbuf([R({ unit: "6D", ...PAST })]);
+    await commitWorkbook(past);
+    const unit = await prisma.unit.findFirstOrThrow({ where: { unitNumber: "6D" } });
+    await markReviewed({ role: "ADMIN" }, unit.id);
+
+    await commitWorkbook(await wbuf([R({ unit: "6D", lessee: "Newer", ...ACTIVE })])); // a current lease: the old review no longer applies
+    expect(await prisma.unit.findUnique({ where: { id: unit.id } })).toMatchObject({ needsStatusReview: false, statusReviewedAt: null });
+
+    await prisma.lease.updateMany({ where: { unitId: unit.id, tenant: { name: "Newer" } }, data: { endDate: new Date("2023-06-30") } }); // it lapses
+    await commitWorkbook(past);
+
+    expect((await prisma.unit.findUnique({ where: { id: unit.id } })).needsStatusReview).toBe(true);
   });
   it("collapses short/long building spellings of the same tower into one unit", async () => {
     // towerNameFor maps both "Ibiza" (2023/2024 short form) and "CV Ibiza Tower"

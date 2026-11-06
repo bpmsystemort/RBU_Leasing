@@ -37,7 +37,7 @@ earlier `Amantemjm/RBU-Leasing-v.2` repository, which is no longer a configured 
 `server/prisma/manual-migrations/2026-10-27-clear-readable-passwords.sql` (verified), so the
 branch is on the hardened base. That migration still has to be applied to every DB.
 
-**Tests at last run (no code changed since):** server 75 files / 730 tests, client 68 files /
+**Tests at last run (no code changed since):** server 75 files / 732 tests, client 68 files /
 518 tests, all passing.
 
 ---
@@ -98,6 +98,7 @@ build in `14127e7`). Plan: `docs/superpowers/plans/2026-10-30-units-blocking.md`
   OCCUPIED unit flagged `needsStatusReview` with no current lease can be made VACANT in one
   click on the Units page. Closes the SP2 open decision that such units were unresolvable until
   SP4. Re-import does not re-flag a unit staff already made VACANT.
+- **Mark reviewed survives a re-import** (`statusReviewedAt`).
 - **Import Portfolio preview** now lists the flagged units (oldest last lease first) and the
   flagged owners (joint / no lessor), each with its source sheet and row.
 
@@ -112,9 +113,11 @@ build in `14127e7`). Plan: `docs/superpowers/plans/2026-10-30-units-blocking.md`
    flagged unit and 409 on an unflagged or already-vacant one (401 without a token), and the
    preview then dropped to 160. The test unit was restored afterwards. **Still not done:** a
    click-through in the browser (the in-app browser pane has not been usable for this app).
-   **Finding:** re-importing re-flags units whose flag was cleared with "Mark reviewed" (3 units
-   today: 161 in the preview vs 158 flagged in the DB), because they still have no current lease.
-   Mark vacant is not affected. Decide whether Mark reviewed should survive a re-import.
+   **Finding, fixed:** a re-import used to re-flag units cleared with "Mark reviewed" (3 units:
+   161 in the preview vs 158 flagged). Mark reviewed now records `Unit.statusReviewedAt`; the importer and
+   the preview skip reviewed units until a current lease has come and gone. Migration
+   `2026-11-06-unit-status-reviewed.sql` (also backfills units reviewed before the column existed) is
+   applied to the sandbox and test DBs.
 2. **Reconcile with `master`.** Merge `origin/master` (one small commit) into the branch. Squash
    Phase 1a history first if that line is part of what is pushed: earlier commits contain real
    names, and `ops/environments.md` / `docs/lessee-simulation-guide.md` contain Windows
@@ -123,8 +126,8 @@ build in `14127e7`). Plan: `docs/superpowers/plans/2026-10-30-units-blocking.md`
    `2026-10-27-clear-readable-passwords.sql`, `2026-10-29-import-review-flags.sql`,
    `2026-10-30-email-settings.sql`, `2026-10-30-owner-accounts.sql`,
    `2026-10-30-one-active-account-per-owner.sql`, `2026-11-03-units-blocking-1-enum.sql`,
-   `2026-11-03-units-blocking-2-block-and-assignments.sql`. Only the sandbox DB has the SP2 ones
-   so far.
+   `2026-11-03-units-blocking-2-block-and-assignments.sql`, `2026-11-06-unit-status-reviewed.sql`.
+   Only the sandbox DB has the SP2 ones so far.
 4. **Push and open the PR** (nothing is pushed today). Deploying is the owner's step.
 5. SP3 → SP4 → SP5, each starting with its own brainstorm → spec → approval → plan → build.
 
