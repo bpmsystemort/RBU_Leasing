@@ -27,7 +27,7 @@ Specs and plans are committed under `docs/superpowers/`. The SDD ledger
 | SP4 — Leases/expiry/renewal + dashboard | ⬜ not started | — |
 | SP5 — People/accounts + Email History | ⬜ not started | — |
 
-**Branch vs `master`:** `sp2/units-blocking` is **80 commits ahead** of `origin/master` and
+**Branch vs `master`:** `origin/master` (`577575d`) was merged into the branch on 2026-11-06, so the branch is no longer behind it. It was **80 commits ahead** of `origin/master` and
 **1 behind** (`577575d` "fail loudly when startup cannot succeed", `server/src/index.js` only).
 Merge base is `6ff5a00`. The previously documented `268ecc0` integration merge is **not** an
 ancestor of `master`; it exists only in the old `amante/*` remote-tracking refs from the
@@ -217,7 +217,7 @@ Work on one machine at a time: commit + push there, pull on the other before wor
 
 ## 8. Open items
 - [ ] Smoke-test the import → review → Mark vacant flow on real data.
-- [ ] Merge `origin/master` into the branch; squash Phase 1a history if it is being pushed.
+- [x] Merge `origin/master` into the branch (done 2026-11-06, clean, `6ad741a`). Still open: squash Phase 1a history if it is being pushed.
 - [ ] Apply the manual SQL (§4.3) to dev, test and prod.
 - [ ] Push `sp2/units-blocking` and open the PR; deploy.
 - [ ] Build SP3, SP4, SP5.
