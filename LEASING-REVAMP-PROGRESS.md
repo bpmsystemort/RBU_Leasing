@@ -105,9 +105,16 @@ build in `14127e7`). Plan: `docs/superpowers/plans/2026-10-30-units-blocking.md`
 
 ## 4. Next steps (in order)
 
-1. **Real-data smoke test.** Everything is verified by automated tests and curl against the
-   sandbox DB `rbu_leasing_sp2`, which has no portfolio data. Nobody has clicked through
-   Preview → Commit → Mark vacant → Units with the cleaned workbook.
+1. **Real-data smoke test.** API-level run done 2026-11-06 against the sandbox DB
+   `rbu_leasing_sp2`, which already holds the imported portfolio (264 units, 292 leases, 243
+   owners; 158 units and 32 owners flagged). Re-previewing the cleaned workbook gave 0 create /
+   292 update / 0 failed, 161 flagged units, 32 flagged owners. Mark vacant returned 200 on a
+   flagged unit and 409 on an unflagged or already-vacant one (401 without a token), and the
+   preview then dropped to 160. The test unit was restored afterwards. **Still not done:** a
+   click-through in the browser (the in-app browser pane has not been usable for this app).
+   **Finding:** re-importing re-flags units whose flag was cleared with "Mark reviewed" (3 units
+   today: 161 in the preview vs 158 flagged in the DB), because they still have no current lease.
+   Mark vacant is not affected. Decide whether Mark reviewed should survive a re-import.
 2. **Reconcile with `master`.** Merge `origin/master` (one small commit) into the branch. Squash
    Phase 1a history first if that line is part of what is pushed: earlier commits contain real
    names, and `ops/environments.md` / `docs/lessee-simulation-guide.md` contain Windows
