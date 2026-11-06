@@ -1,202 +1,215 @@
 # RBU Leasing — Enhancement Program: Progress & Continuation
 
-**Last updated:** 2026-11-03
-**Active branch:** `feat/units-blocking` (contains the full stack of all work below)
-**Remote:** `origin` → https://github.com/Amantemjm/RBU-Leasing-v.2.git (everything below is pushed)
+**Last updated:** 2026-11-06
+**Active branch:** `sp2/units-blocking` @ `9047802` (worktree `repo-sp2`). Carries the whole stack below.
+**Remote:** `origin` → https://github.com/bpmsystemort/RBU_Leasing.git
+**Pushed?** **No.** Nothing on `sp2/units-blocking` is pushed, and none of it is on `origin/master` yet.
 
-This is the canonical hand-off for continuing the leasing-system enhancements and merging
-them into `master`. It replaces the local-only SDD ledger (`.superpowers/sdd/progress.md`,
-which is gitignored and does **not** travel between machines). All specs and plans **are**
-committed under `docs/superpowers/` and travel with the branch.
+This is the canonical hand-off for continuing the leasing-system enhancements and getting them
+onto `master`. It supersedes the 2026-11-03 version, which described `master` as already
+containing the integrated features and SP2 as spec-only; neither was true of this repository.
+Specs and plans are committed under `docs/superpowers/`. The SDD ledger
+(`.superpowers/sdd/progress.md`) is gitignored and does not travel between machines.
 
 ---
 
 ## 1. Status at a glance
 
-| Work | Branch | State | Tests |
-|---|---|---|---|
-| Import v2 (Excel portfolio) | `feat/import-validation-preview` | ✅ **MERGED → master** | green |
-| Owner accounts + linking | `feat/owner-accounts` | ✅ **MERGED → master** | green |
-| Configurable Email Settings | `feat/email-settings` | ✅ **MERGED → master** | green |
-| **SP1 — Navigation & shell** | `feat/nav-shell` | ✅ **MERGED → master** | — |
-| **SP2 — Units & blocking** | `feat/units-blocking` @ `6670c27` | 🟡 **spec only** (no code yet) — awaiting approval | — |
-| SP3 — Leasing workflow & move-in | — | ⬜ not started | — |
-| SP4 — Leases/expiry/renewal + dashboard | — | ⬜ not started | — |
-| SP5 — People/accounts + Email History | — | ⬜ not started | — |
+| Work | State | Where it lives |
+|---|---|---|
+| Import v2 (Excel portfolio) | ✅ built, in the branch | `sp2/units-blocking` (not on `origin/master`) |
+| Owner accounts + linking | ✅ built, in the branch | same |
+| Configurable Email Settings | ✅ built, in the branch | same |
+| SP1 — Navigation & shell | ✅ built, in the branch | same |
+| **SP2 — Units & blocking** | ✅ **built, reviewed, tested** (see §3) | `sp2/units-blocking` |
+| Post-SP2 import work (dates, Mark vacant, review tables) | ✅ built, tested | `sp2/units-blocking` (3 commits on top) |
+| SP3 — Leasing workflow & move-in | ⬜ not started | — |
+| SP4 — Leases/expiry/renewal + dashboard | ⬜ not started | — |
+| SP5 — People/accounts + Email History | ⬜ not started | — |
 
-**✅ `master` is now at `268ecc0` (pushed to origin) — the four features above are MERGED.**
-On 2026-11-03 the feature stack was integrated with `origin/master`'s **security-hardening
-line** (which had diverged: endpoint throttling, access control, and "honest password reset"
-that removed readable-password storage). The merge preserved **both**: all four features AND
-every security fix. Conflict resolutions (rate-limiting reconciled to keep both limiters;
-`passwordPlain` exposure + its last write removed) were security-reviewed (verdict: safe) and
-validated — **server 70 files / 565 tests, client 65 / 451, build OK**.
+**Branch vs `master`:** `sp2/units-blocking` is **80 commits ahead** of `origin/master` and
+**1 behind** (`577575d` "fail loudly when startup cannot succeed", `server/src/index.js` only).
+Merge base is `6ff5a00`. The previously documented `268ecc0` integration merge is **not** an
+ancestor of `master`; it exists only in the old `amante/*` remote-tracking refs from the
+earlier `Amantemjm/RBU-Leasing-v.2` repository, which is no longer a configured remote.
 
-`feat/units-blocking` (SP2) has been **merged onto this secured master**, so SP2 now builds on
-the hardened base — its code equals master; only the SP2 spec + this doc are extra.
+**Security line:** `master` and the branch both contain
+`server/prisma/manual-migrations/2026-10-27-clear-readable-passwords.sql` (verified), so the
+branch is on the hardened base. That migration still has to be applied to every DB.
 
-**⚠️ New manual migration from the security line to apply to each DB:**
-`server/prisma/manual-migrations/2026-10-27-clear-readable-passwords.sql` (nulls any
-pre-existing readable passwords). Apply it to `rbu_leasing` + `rbu_leasing_test` (+ prod)
-alongside the others.
+**Tests at last run (no code changed since):** server 75 files / 730 tests, client 68 files /
+518 tests, all passing.
 
 ---
 
-## 2. The program (how this is being built)
+## 2. The program
 
 A large request — navigation restructure, page redesigns by business purpose, leasing-workflow
-fixes, and lease-term/expiry/renewal + dashboard analytics — was decomposed, after a read-only
-audit, into **five sequenced sub-projects**. Each goes through the Superpowers flow:
-**brainstorm → spec → (your approval) → writing-plans → subagent-driven build (implementer +
-reviewer per task) → final whole-branch review → merge.**
+fixes, and lease-term/expiry/renewal + dashboard analytics — was decomposed into **five
+sequenced sub-projects**. Each goes through: **brainstorm → spec → approval → writing-plans →
+subagent-driven build (implementer + reviewer per task) → final whole-branch review → merge.**
 
-### Locked audit decisions (apply to all sub-projects)
-- **Sequenced sub-projects** (not one big bang).
+### Locked audit decisions
+- Sequenced sub-projects, not one big bang.
 - **Signed deals → Lease**: a signed leasing transaction becomes the source of truth that
   creates/updates a `Lease` (wired in SP4).
 - **Pipeline-driven unit lifecycle**: `VACANT / BLOCKED / OCCUPIED / UNAVAILABLE` (SP2).
 - **No Prospect entity** — "Prospect Records" is a view over un-converted inquiries.
-- Defaults: business timezone **Asia/Manila** (configurable); **move-in** = the pipeline's final
-  stage + fields; **Email History** on a Communication page, never the dashboard; executed-
-  contract-date edits **ADMIN-only + audited**; no page deleted when a nav entry is consolidated.
+- Defaults: timezone **Asia/Manila** (configurable); **move-in** = the pipeline's final stage;
+  **Email History** on a Communication page, never the dashboard; executed-contract-date edits
+  **ADMIN-only + audited**; no page deleted when a nav entry is consolidated.
 
-### Do NOT (hard constraints)
+### Do NOT
 - No billing, payment tracking, or Property-Management module.
-- Preserve: Excel import idempotency + owner-assignment, owner↔account separation, historical
+- Preserve: Excel import idempotency + owner assignment, owner↔account separation, historical
   data, existing permissions/security, audit logging.
 
 ---
 
-## 3. Sub-project detail & the next concrete step
+## 3. What is built
 
-### SP1 — Navigation & shell ✅ DONE (merge-ready)
-- Spec: `docs/superpowers/specs/2026-10-30-navigation-shell-design.md`
-- Plan: `docs/superpowers/plans/2026-10-30-navigation-shell.md`
-- Built: `client/src/lib/nav.js` (nav model + `visibleNav`), `AppLayout.vue` rebuilt
-  (5-group collapsible, permission-aware sidebar + section sub-labels + persisted collapse +
-  brand›group›page breadcrumb), every staff route re-homed, Tracker/Transactions consolidated.
-  Structural only — no route/permission/data/server change. Final review: READY TO MERGE.
+### SP1 — Navigation & shell ✅
+Spec/plan: `docs/superpowers/{specs,plans}/2026-10-30-navigation-shell*`. `client/src/lib/nav.js`,
+rebuilt `AppLayout.vue` (5 collapsible permission-aware groups, breadcrumb). Structural only.
 
-### SP2 — Units & blocking 🟡 SPEC ONLY — **this is where to resume**
-- Spec (approved decisions, pending final go): `docs/superpowers/specs/2026-10-30-units-blocking-design.md`
-- Locked SP2 decisions: unit states `{VACANT, BLOCKED, OCCUPIED, UNAVAILABLE}` (keep OCCUPIED);
-  **deliberate** block action (never auto-block on inquiry); **one active deal per unit**
-  (fixes the `ensureForInquiry` double-transaction bug at `leasingTransactionService.js:67-69`);
-  reassignment + a dedicated `UnitAssignmentEvent` history table (verification reuses
-  `UnitOwner.needsReview` + `Unit.approvalStatus`).
-- **Next step to resume SP2:** confirm the spec → run `writing-plans` to produce
-  `docs/superpowers/plans/2026-10-30-units-blocking.md` → build with `subagent-driven-development`
-  (implementer+reviewer per task, then a final review) → merge.
-- SP2 adds a DB migration (manual SQL both DBs): `UnitStatus` += `BLOCKED`,`UNAVAILABLE`;
-  `Unit.blockedByTransactionId` (nullable FK); new `UnitAssignmentEvent` table. Then
-  `prisma generate`. It also wires the two SP1-deferred nav entries (Unit Blocking,
-  Unit-Owner Assignments).
+### SP2 — Units & blocking ✅
+Spec: `docs/superpowers/specs/2026-10-30-units-blocking-design.md` (brought in line with the
+build in `14127e7`). Plan: `docs/superpowers/plans/2026-10-30-units-blocking.md`.
+- Unit states `VACANT / BLOCKED / OCCUPIED / UNAVAILABLE`; deliberate block action (never an
+  auto-block on inquiry); **one active deal per unit** (fixes the `ensureForInquiry`
+  double-transaction bug); validated owner reassignment with `UnitAssignmentEvent` history;
+  signed deals keep their unit; dead early deals end and release.
+- Manual availability changes allowed only VACANT↔UNAVAILABLE; OCCUPIED/BLOCKED refuse with 409.
+- Client: units console (badges, filters, sorting, paging, availability actions), Unit Blocking
+  console, Unit-Owner Assignments page, and their nav entries.
+- Review decisions taken: owner edit through plain PATCH is refused (409, use reassignment);
+  "Mark reviewed" clears `needsStatusReview`.
+- **Schema (manual SQL, no Prisma migrate):**
+  `2026-11-03-units-blocking-1-enum.sql`, `2026-11-03-units-blocking-2-block-and-assignments.sql`
+  (+ `.down.sql`): `UnitStatus` += `BLOCKED`,`UNAVAILABLE`; `Unit.blockedByTransactionId`;
+  `UnitAssignmentEvent` table.
 
-### SP3 / SP4 / SP5 ⬜ not started
-- SP3 Leasing workflow & move-in (Inquiries redesign + Viewing/Follow-up list + move-in stage +
-  requirements gating + Requirements/Documents pages).
-- SP4 Leases/expiry/renewal + dashboard analytics (signed→Lease wiring, contract metadata,
-  renewal history, expiry categories, Leases & Contracts redesign, dashboard cards/chart/table).
-  Also reconcile the dead `DashboardView`/`dashboardService` here.
-- SP5 People/accounts polish + **Email History** (`EmailLog` model + page).
-
-(Each starts with its own brainstorm → spec → approval → plan → build.)
+### Post-SP2 import work ✅ (commits `dfac084`, `561a706`, `9047802`)
+- **Date parsing** (`server/src/lib/importClean.js`): text dates in any common format
+  (`2025-11-29`, `29 Nov 2025`, `November 29, 2025`, `11/29/2025`, ordinals) read as the same
+  UTC day Excel date cells produce. Numeric d/m/y is month-first unless a part is > 12;
+  impossible dates and typo'd month names are `null`, never guessed.
+- **Mark vacant** (`PATCH /api/units/:id/mark-vacant`, Admin + Leasing Officer): an imported
+  OCCUPIED unit flagged `needsStatusReview` with no current lease can be made VACANT in one
+  click on the Units page. Closes the SP2 open decision that such units were unresolvable until
+  SP4. Re-import does not re-flag a unit staff already made VACANT.
+- **Import Portfolio preview** now lists the flagged units (oldest last lease first) and the
+  flagged owners (joint / no lessor), each with its source sheet and row.
 
 ---
 
-## 4. Keeping BOTH servers identical (frontend + backend)
+## 4. Next steps (in order)
 
-**Git is the single source of truth for code.** Both machines should sit on the same commit.
+1. **Real-data smoke test.** Everything is verified by automated tests and curl against the
+   sandbox DB `rbu_leasing_sp2`, which has no portfolio data. Nobody has clicked through
+   Preview → Commit → Mark vacant → Units with the cleaned workbook.
+2. **Reconcile with `master`.** Merge `origin/master` (one small commit) into the branch. Squash
+   Phase 1a history first if that line is part of what is pushed: earlier commits contain real
+   names, and `ops/environments.md` / `docs/lessee-simulation-guide.md` contain Windows
+   username paths (see the SDD ledger).
+3. **Apply the manual SQL to every DB** (dev, test, prod), then `npx prisma generate`:
+   `2026-10-27-clear-readable-passwords.sql`, `2026-10-29-import-review-flags.sql`,
+   `2026-10-30-email-settings.sql`, `2026-10-30-owner-accounts.sql`,
+   `2026-10-30-one-active-account-per-owner.sql`, `2026-11-03-units-blocking-1-enum.sql`,
+   `2026-11-03-units-blocking-2-block-and-assignments.sql`. Only the sandbox DB has the SP2 ones
+   so far.
+4. **Push and open the PR** (nothing is pushed today). Deploying is the owner's step.
+5. SP3 → SP4 → SP5, each starting with its own brainstorm → spec → approval → plan → build.
 
-### Make the other server match this one
+### Known follow-ups inside SP2 (recorded, not blocking)
+- `nextReference()` is read-then-write; a collision gives a 500 (pre-existing).
+- No unique index yet for "one active prospect deal per unit"; the guard is in code only.
+  Closing it needs manual SQL and covering `/link` and tenant-linked paths.
+- Officer-scope note on the Unit Blocking console; direct test for the unit status stale-read
+  conflict path.
+- One import test hardcodes an ACTIVE lease ending 2027-01-01 (pre-existing); it will start
+  failing when that date passes.
+
+### Enhancement ideas (not requested)
+- Bulk **Mark vacant** / **Mark reviewed** with row checkboxes (161 flagged units one by one is
+  slow); Export to Excel and a tower / last-ended filter on the two review tables.
+- Owner review currently has only "Mark reviewed"; no way to split a joint owner.
+- Undo or per-batch record for a committed import.
+- Update the Walkthrough sheet in `Roles Notes.xlsx` for Mark vacant and the review tables.
+
+### Data questions open on the cleaned workbook
+- 2026 row 265: one Lessor entry needs confirmation.
+- Two typo guesses in Renewal Period are marked for review; repeated periods and "1 year" values
+  are left as written.
+
+### Other lines of work in the main checkout (not part of this program)
+`repo/` carries `feature/leasing-mvp-phase-1a` (Phase 1a written and reviewed, **nothing
+executed**; Task 12 dev-machine checklist pending; Phase 1b plan written) and
+`feature/unit-hold-and-closing-reasons`. Track those in their own ledgers.
+
+---
+
+## 5. Keeping machines identical
+
+Git is the source of truth for code; it does **not** carry the database.
+
 ```bash
-git clone https://github.com/Amantemjm/RBU-Leasing-v.2.git   # first time only
-cd RBU-Leasing-v.2
+git clone https://github.com/bpmsystemort/RBU_Leasing.git   # first time only
 git fetch origin
-git checkout feat/units-blocking
-git pull                      # identical frontend + backend SOURCE as this machine
-npm install                   # identical deps (root package-lock.json is committed)
-npm run build --workspace client   # rebuild client/dist (dist is gitignored, so rebuild it)
+git checkout sp2/units-blocking      # once pushed
+npm install
+npm run build --workspace client     # client/dist is gitignored
 ```
 
-### Backend schema parity (git does NOT carry the database)
-The project uses **manual SQL migrations** (schema history has drifted — see project memory:
-never `prisma migrate dev` / `db push`). All SQL **is** committed under
-`server/prisma/manual-migrations/` and `server/prisma/migrations/`. To make the other server's
-DB identical:
+**Schema parity:** manual SQL only (history has drifted — never `prisma migrate dev` / `db push`).
+Either dump/restore (`pg_dump -Fc` / `pg_restore`) for exact parity, or create the DBs, apply
+the tracked Prisma migrations, then every file in `server/prisma/manual-migrations/*.sql` in
+date order, then `npx prisma generate`. Load portfolio data through the Admin Import Portfolio page.
 
-- **Exact parity (recommended — same schema + same data):** dump this server's DBs and restore
-  on the other:
-  ```bash
-  # on THIS server
-  pg_dump -Fc rbu_leasing      > rbu_leasing.dump
-  pg_dump -Fc rbu_leasing_test > rbu_leasing_test.dump
-  # on the OTHER server (createdb first if needed)
-  pg_restore -d rbu_leasing      rbu_leasing.dump
-  pg_restore -d rbu_leasing_test rbu_leasing_test.dump
-  ```
-- **Fresh DB (schema only, then import data):** create the DBs, apply the tracked Prisma
-  migrations, then apply every file in `server/prisma/manual-migrations/*.sql` in **date order**
-  (they cover everything after `2026-08-28`), then `npx prisma generate`. Load portfolio data via
-  the in-app ADMIN Import Portfolio page.
+**Per-machine, gitignored:** `server/.env` (copy `.env.example`: `DATABASE_URL`, `JWT_SECRET`,
+`PORT`, `NODE_ENV`, `PUBLIC_BASE_URL`, `MAIL_*`; the SMTP password is never in git), a test
+`DATABASE_URL` in `server/.env.test`, `client/dist`, `node_modules`.
 
-### Per-machine files to recreate (gitignored by design)
-- `server/.env` — copy from `server/.env.example`; set `DATABASE_URL` (dev), a test
-  `DATABASE_URL` in `server/.env.test`, `JWT_SECRET`, `PORT`, `NODE_ENV`, `PUBLIC_BASE_URL`,
-  and the `MAIL_*` block (host `smtp-mail.outlook.com`, port `587`, secure `false`, the
-  `noreply-posh@ortigas.com.ph` user + its password + from). **The SMTP password is never in
-  git and must be entered by you.**
-- `client/dist` — produced by `npm run build` (above).
-- `node_modules` — produced by `npm install`.
-
-### Staying in sync going forward
-Work on **one** machine at a time: commit + `git push` there, then `git pull` on the other
-before working. Don't edit both without pulling, or the branches diverge and need a merge.
+Work on one machine at a time: commit + push there, pull on the other before working.
 
 ---
 
-## 5. Running the app
-- Dev/prod-style serve (this machine): `NODE_ENV=production` server on `:5050` serves
-  `client/dist` + the API. Start: `node server/src/index.js` (this machine also has a Windows
-  Startup `.vbs` auto-start loop — that is machine-specific and not in git).
-- After any **client** change: `npm run build --workspace client`, then reload.
+## 6. Running the app
+- The server serves the built client (`client/dist`) **only when `NODE_ENV=production`**. In
+  that mode one process serves both the API and the web app (this worktree's `.env` uses
+  `PORT=5055`, DB `rbu_leasing_sp2`). Start: `NODE_ENV=production node server/src/index.js`.
+- After any **client** change: `npm run build --workspace client`, then hard-reload (Ctrl+F5).
+  A running server keeps serving the old build until rebuilt; check what is listening on the
+  port first if the page looks stale.
 - After any **server code** change: restart the node process.
 - After any **schema** change: stop the server (Windows holds the Prisma DLL), apply the manual
-  SQL to **both** DBs, `npx prisma generate`, restart.
-
----
-
-## 6. Merge-to-master plan (your call; I can do it locally + push, you approve)
-
-1. ✅ `feat/import-validation-preview` → `master` — **DONE** (in `268ecc0`)
-2. ✅ `feat/owner-accounts` → `master` — **DONE**
-3. ✅ `feat/email-settings` → `master` — **DONE**
-4. ✅ `feat/nav-shell` (SP1) → `master` — **DONE**
-   *(1–4 landed together as one integration merge `268ecc0`, reconciled with origin/master's
-   security line; the earlier `ahead 18 / behind 14` divergence is resolved — origin/master's
-   14 security commits are preserved in master.)*
-5. ⬜ `feat/units-blocking` (SP2) → `master` — **pending** (only after SP2 is actually built;
-   today it is spec-only, already rebased onto the secured master).
-
-Before deploying `master`: apply its manual SQL migrations to the production DB — including the
-new `2026-10-27-clear-readable-passwords.sql`. Deploying is yours to run.
+  SQL to every DB, `npx prisma generate`, restart.
+- Dev mode instead: `npx vite` in `client/` proxies `/api` to the API port set in
+  `client/vite.config.js` (5050 in this worktree).
+- The Claude desktop preview launch config lives outside the repo, at
+  `C:\Users\bpm\Documents\RBU Leasing\.claude\launch.json` (configs `sp2-app` 5055,
+  `sp2-server` 5050, `sp2-client` 5174, each a `.cmd` beside it).
 
 ---
 
 ## 7. Project rules (carry into every session)
-- **Manual SQL migrations only** (apply to BOTH `rbu_leasing` and `rbu_leasing_test` + prod),
-  then `prisma generate`. Never `prisma migrate dev` / `db push`.
-- Every commit ends with: `Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>`.
-- SMTP password/user stay in `server/.env`; never in the DB, any API response, logs, or the client.
-- Client tests: `npx vitest run` in `client/`. Server tests: `npm test` in `server/`
-  (forces the test DB; never sends real email).
-- The SMTP account `noreply-posh@ortigas.com.ph` authenticates (verified); a real
-  proof-of-delivery test send has **not** been run yet (needs a recipient + go-ahead).
+- **Manual SQL migrations only**, applied to every DB, then `prisma generate`.
+- Commit attribution follows the session instructions; recent commits end with
+  `Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>`.
+- SMTP password/user stay in `server/.env`; never in the DB, any API response, logs, or client.
+- Client tests: `npx vitest run` in `client/`. Server tests: `npm test` in `server/` (forces the
+  test DB; never sends real email; the server suite takes several minutes, so run it with a long
+  timeout or in the background).
+- The SMTP account authenticates (verified earlier); a real proof-of-delivery test send has not
+  been run (needs a recipient + go-ahead: `node server/scripts/test-mail.js <you@addr>`).
 
 ---
 
 ## 8. Open items
-- [ ] Approve the SP2 spec → build SP2 (plan + subagent build + review).
-- [ ] Build SP3, SP4, SP5 (each: brainstorm → spec → approval → plan → build).
-- [ ] Merge the merge-ready branches into `master` (stack order above) + deploy.
-- [ ] Optional: run the email proof-of-delivery test (`node server/scripts/test-mail.js <you@addr>`).
+- [ ] Smoke-test the import → review → Mark vacant flow on real data.
+- [ ] Merge `origin/master` into the branch; squash Phase 1a history if it is being pushed.
+- [ ] Apply the manual SQL (§4.3) to dev, test and prod.
+- [ ] Push `sp2/units-blocking` and open the PR; deploy.
+- [ ] Build SP3, SP4, SP5.
+- [ ] Answer the open data questions on the cleaned workbook (§4).
+- [ ] Optional: email proof-of-delivery test.
