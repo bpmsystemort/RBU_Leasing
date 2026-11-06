@@ -1,4 +1,4 @@
-import rateLimit from "express-rate-limit";
+import expressRateLimit from "express-rate-limit";
 
 // Throttles for the endpoints anyone can reach without a token. Counted per
 // client address, in memory — enough to stop a script guessing passwords or
@@ -11,7 +11,7 @@ import rateLimit from "express-rate-limit";
 const off = () => process.env.RATE_LIMIT !== "on" && (process.env.NODE_ENV === "test" || !!process.env.VITEST);
 
 export function makeLimiter({ windowMs, limit, message, skipSuccessfulRequests = false, skip = off }) {
-  return rateLimit({
+  return expressRateLimit({
     windowMs,
     limit,
     skipSuccessfulRequests,
@@ -54,3 +54,20 @@ export const inquiryLimiter = makeLimiter({
   limit: LIMITS.inquiry,
   message: "Too many inquiries from this address. Please try again later.",
 });
+
+// In-memory fixed-window rate limiter — no dependency. Keyed by `key(req)`
+// (defaults to the caller's IP); once a window's hit count reaches `max`, further
+// requests in that window get a 429 until the window resets. Used for the
+// token-bearing endpoints the owner-accounts + email work added (owner-invite
+// accept, admin email-test send), which the express-rate-limit limiters above
+// don't cover.
+export function rateLimit({ windowMs = 15 * 60 * 1000, max = 10, key = (req) => req.ip } = {}) {
+  const hits = new Map();
+  return (req, res, next) => {
+    const k = key(req); const now = Date.now();
+    const rec = hits.get(k);
+    if (!rec || now > rec.reset) { hits.set(k, { count: 1, reset: now + windowMs }); return next(); }
+    if (rec.count >= max) return res.status(429).json({ error: "Too many requests, try again later", code: "RATE_LIMITED" });
+    rec.count++; next();
+  };
+}

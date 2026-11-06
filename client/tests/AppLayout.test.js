@@ -37,9 +37,59 @@ describe("AppLayout (sidebar shell)", () => {
 
   it("lists the staff functions in the sidebar", async () => {
     const nav = mountAs("LEASING_OFFICER").find(".sidebar__nav").text();
-    for (const label of ["Dashboard", "Inquiries", "Owners", "Units", "Tenants", "Leases", "Approvals", "Lessor Sheets", "Lessee Sheets"]) {
+    for (const label of ["Dashboard", "Inquiry List", "Owner Directory", "Unit List", "Tenant Records", "Leases & Contracts", "Approvals", "Lessor Sheets", "Lessee Sheets"]) {
       expect(nav).toContain(label);
     }
+  });
+
+  it("groups the sidebar and shows a group's section labels", () => {
+    const nav = mountAs("ADMIN").find(".sidebar__nav").text();
+    expect(nav).toContain("Leasing Operations"); // group header
+    expect(nav).toContain("Requirements & Documents"); // section sub-label
+    expect(nav).toContain("Communication");
+  });
+
+  it("collapses a group on click and remembers it", async () => {
+    // isVisible() reads computed style, which happy-dom only resolves for
+    // nodes attached to the document — see InquiryView.test.js for the same pattern.
+    const auth = useAuthStore();
+    auth.setSession({ token: "t", user: { name: "Test User", role: "ADMIN" } });
+    const router = makeRouter(); router.push("/app"); await router.isReady();
+    const w = mount(AppLayout, { global: { plugins: [router] }, attachTo: document.body });
+    try {
+      const group = w.findAll(".navgroup").find((g) => g.text().includes("Leasing Operations"));
+      const toggle = group.find(".navgroup__toggle");
+      expect(toggle.attributes("aria-expanded")).toBe("true");
+      await toggle.trigger("click");
+      expect(toggle.attributes("aria-expanded")).toBe("false");
+      expect(group.find(".navgroup__items").isVisible()).toBe(false);
+      expect(JSON.parse(localStorage.getItem("rbu.nav.collapsedGroups"))).toContain("Leasing Operations");
+    } finally {
+      w.unmount();
+    }
+  });
+
+  it("keeps the active group expanded even if stored collapsed", async () => {
+    localStorage.setItem("rbu.nav.collapsedGroups", JSON.stringify(["Leasing Operations"]));
+    const auth = useAuthStore();
+    auth.setSession({ token: "t", user: { name: "T", role: "ADMIN" } });
+    const router = makeRouter(); router.push("/app/units"); await router.isReady();
+    const w = mount(AppLayout, { global: { plugins: [router] }, attachTo: document.body });
+    try {
+      const group = w.findAll(".navgroup").find((g) => g.text().includes("Leasing Operations"));
+      expect(group.find(".navgroup__items").isVisible()).toBe(true);
+    } finally {
+      w.unmount();
+    }
+  });
+
+  it("shows a group › page breadcrumb", async () => {
+    const auth = useAuthStore();
+    auth.setSession({ token: "t", user: { name: "T", role: "ADMIN" } });
+    const router = makeRouter(); router.push("/app/units"); await router.isReady();
+    const w = mount(AppLayout, { global: { plugins: [router] } });
+    expect(w.find(".crumbs__group").text()).toBe("Leasing Operations");
+    expect(w.find(".crumbs__here").text()).toBe("Unit List");
   });
 
   it("shows System Users and Audit Trail only to the super admin", () => {
@@ -119,6 +169,18 @@ describe("AppLayout (sidebar shell)", () => {
       const w = withPending("ADMIN", 130);
       expect(w.find(".bell__count").text()).toBe("99+");
     });
+  });
+
+  it("lists the unit blocking and assignment pages by role", () => {
+    const adminNav = mountAs("ADMIN").find(".sidebar__nav").text();
+    expect(adminNav).toContain("Unit Blocking");
+    expect(adminNav).toContain("Unit-Owner Assignments");
+    const officerNav = mountAs("LEASING_OFFICER").find(".sidebar__nav").text();
+    expect(officerNav).toContain("Unit Blocking");
+    expect(officerNav).not.toContain("Unit-Owner Assignments");
+    const viewerNav = mountAs("VIEWER").find(".sidebar__nav").text();
+    expect(viewerNav).not.toContain("Unit Blocking");
+    expect(viewerNav).not.toContain("Unit-Owner Assignments");
   });
 
   it("names the CMS section Content Manager, not Forms", () => {

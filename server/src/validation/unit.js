@@ -12,10 +12,16 @@ export const unitCreateSchema = z.object({
   // Optional: base rent is captured at the lease level, not on the unit. The
   // service defaults it to 0 so registration works without it.
   baseRent: z.coerce.number().nonnegative().nullish(),
-  status: z.enum(["VACANT", "OCCUPIED"]).optional(),
+  // BLOCKED and OCCUPIED are pipeline-driven; only VACANT/UNAVAILABLE are manual.
+  status: z.enum(["VACANT", "UNAVAILABLE"]).optional(),
   submit: z.boolean().optional(),
 });
 
 export const unitUpdateSchema = unitCreateSchema.partial();
 
 export const unitRejectSchema = z.object({ remarks: z.string().min(1, "A remark is required") });
+
+export const assignOwnerSchema = z.object({
+  toOwnerId: z.string().min(1),
+  reason: z.string().trim().max(500).nullish(),
+});

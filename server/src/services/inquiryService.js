@@ -1,6 +1,6 @@
 import { prisma } from "../lib/prisma.js";
 import { NotFoundError, InvalidReferenceError, ConflictError } from "../lib/errors.js";
-import { ensureForInquiry } from "./leasingTransactionService.js";
+import { ensureForInquiry, assertUnitFreeForInquiry } from "./leasingTransactionService.js";
 
 const assigneeInclude = {
   assignedTo: { select: { id: true, name: true, email: true } },
@@ -50,9 +50,21 @@ export async function acceptInquiry(user, id) {
   if (inquiry.assignedToId && inquiry.assignedToId !== user.userId) {
     throw new ConflictError("This inquiry has already been accepted by another O-Lease");
   }
+  // Refuse before assigning, so a conflicting acceptance leaves the inquiry untouched.
+  await assertUnitFreeForInquiry(inquiry);
   const updated = await prisma.inquiry.update({ where: { id }, data: { assignedToId: user.userId }, include: assigneeInclude });
   // Accepting an inquiry opens the end-to-end leasing transaction (idempotent).
-  await ensureForInquiry(updated, user);
+  try {
+    await ensureForInquiry(updated, user);
+  } catch (e) {
+    if (e instanceof ConflictError) {
+      // The backstop refused after the assignment (a rival deal appeared since the
+      // pre-check): put the inquiry back as it was before rethrowing.
+      await prisma.inquiry.update({ where: { id }, data: { assignedToId: inquiry.assignedToId } })
+        .catch((restoreError) => console.error("Inquiry assignment not restored:", restoreError.message));
+    }
+    throw e;
+  }
   return updated;
 }
 

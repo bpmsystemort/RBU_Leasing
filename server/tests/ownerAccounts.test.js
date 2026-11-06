@@ -1,0 +1,492 @@
+import crypto from "crypto";
+import { describe, it, expect, beforeEach } from "vitest";
+import request from "supertest";
+import { createApp } from "../src/app.js";
+import { resetCrudTables, tokens, factory } from "./helpers.js";
+import { prisma } from "../src/lib/prisma.js";
+import { hashPassword } from "../src/services/authService.js";
+import { flushAudits } from "../src/middleware/audit.js";
+
+const app = createApp();
+beforeEach(async () => { await resetCrudTables(); });
+
+const adminAuth = () => ({ Authorization: `Bearer ${tokens.admin()}` });
+
+// Direct-to-DB like accountApproval.test.js's pending-lessor fixtures — this
+// suite is about the approval decision itself, not the signup endpoint.
+let pendingSeq = 0;
+async function pendingOwnerUser(over = {}) {
+  pendingSeq += 1;
+  return prisma.user.create({
+    data: {
+      name: "Pending Lessor",
+      email: `pending.lessor.${pendingSeq}@x.com`,
+      contactEmail: "pending.lessor@example.com",
+      role: "UNIT_OWNER",
+      status: "PENDING",
+      passwordHash: "x",
+      passwordPlain: "x",
+      ...over,
+    },
+  });
+}
+
+describe("Approval can link to an existing (imported) owner", () => {
+  it("links to the given existingUnitOwnerId instead of creating a new owner", async () => {
+    const owner = await factory.owner({ name: "Juan Cruz" });
+    const user = await pendingOwnerUser({ contactEmail: "juan.updated@example.com" });
+    const before = await prisma.unitOwner.count();
+
+    const res = await request(app)
+      .patch(`/api/auth/pending/${user.id}/approve`)
+      .set(adminAuth())
+      .send({ existingUnitOwnerId: owner.id });
+
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe("APPROVED");
+    expect(res.body.unitOwnerId).toBe(owner.id);
+    // No new UnitOwner row — the applicant was linked to the existing one.
+    expect(await prisma.unitOwner.count()).toBe(before);
+
+    // The owner's email is refreshed from the applicant's contact email.
+    const after = await prisma.unitOwner.findUnique({ where: { id: owner.id } });
+    expect(after.email).toBe("juan.updated@example.com");
+  });
+
+  it("still creates a new owner when no existingUnitOwnerId is given", async () => {
+    const user = await pendingOwnerUser();
+    const before = await prisma.unitOwner.count();
+
+    const res = await request(app)
+      .patch(`/api/auth/pending/${user.id}/approve`)
+      .set(adminAuth())
+      .send();
+
+    expect(res.status).toBe(200);
+    expect(await prisma.unitOwner.count()).toBe(before + 1);
+    expect(res.body.unitOwnerId).toBeTruthy();
+  });
+
+  it("refuses to link an owner that already has an active account (409)", async () => {
+    const owner = await factory.owner({ name: "Taken Owner" });
+    await prisma.user.create({
+      data: {
+        name: "Existing Owner User", email: "existing.owner@x.com", contactEmail: "existing.owner@x.com",
+        role: "UNIT_OWNER", status: "APPROVED", passwordHash: "x", passwordPlain: "x",
+        unitOwnerId: owner.id,
+      },
+    });
+    const applicant = await pendingOwnerUser({ email: "second.applicant@x.com" });
+
+    const res = await request(app)
+      .patch(`/api/auth/pending/${applicant.id}/approve`)
+      .set(adminAuth())
+      .send({ existingUnitOwnerId: owner.id });
+
+    expect(res.status).toBe(409);
+    // Refused outright, not half-applied: the applicant is still PENDING.
+    const after = await prisma.user.findUnique({ where: { id: applicant.id } });
+    expect(after.status).toBe("PENDING");
+    expect(after.unitOwnerId).toBeNull();
+  });
+
+  it("rejects an existingUnitOwnerId that does not reference a real owner (400)", async () => {
+    const applicant = await pendingOwnerUser();
+    const res = await request(app)
+      .patch(`/api/auth/pending/${applicant.id}/approve`)
+      .set(adminAuth())
+      .send({ existingUnitOwnerId: "ghost-owner-id" });
+    expect(res.status).toBe(400);
+  });
+});
+
+describe("Suspending and restoring an account", () => {
+  async function approvedUser(over = {}) {
+    pendingSeq += 1;
+    return prisma.user.create({
+      data: {
+        name: "Active User",
+        email: `active.${pendingSeq}@x.com`,
+        role: "VIEWER",
+        status: "APPROVED",
+        passwordHash: "x",
+        passwordPlain: "x",
+        ...over,
+      },
+    });
+  }
+
+  it("suspends an approved user, who still shows up in /auth/users as SUSPENDED, then restores them", async () => {
+    const user = await approvedUser();
+
+    const suspendRes = await request(app)
+      .patch(`/api/auth/users/${user.id}/suspend`)
+      .set(adminAuth());
+    expect(suspendRes.status).toBe(200);
+    expect(suspendRes.body).toMatchObject({ id: user.id, status: "SUSPENDED" });
+
+    const listRes = await request(app).get("/api/auth/users").set(adminAuth());
+    expect(listRes.status).toBe(200);
+    const row = listRes.body.find((u) => u.id === user.id);
+    expect(row).toBeTruthy();
+    expect(row.status).toBe("SUSPENDED");
+
+    const restoreRes = await request(app)
+      .patch(`/api/auth/users/${user.id}/restore`)
+      .set(adminAuth());
+    expect(restoreRes.status).toBe(200);
+    expect(restoreRes.body).toMatchObject({ id: user.id, status: "APPROVED" });
+
+    const after = await prisma.user.findUnique({ where: { id: user.id } });
+    expect(after.status).toBe("APPROVED");
+  });
+
+  it("a suspended account logs in to a restricted session that verifyJwt-gated routes refuse", async () => {
+    const user = await prisma.user.create({
+      data: {
+        name: "Will Suspend", email: "will.suspend@x.com", role: "VIEWER", status: "APPROVED",
+        passwordHash: await hashPassword("pw123456"), passwordPlain: "pw123456",
+      },
+    });
+    await request(app).patch(`/api/auth/users/${user.id}/suspend`).set(adminAuth());
+
+    const login = await request(app).post("/api/auth/login")
+      .send({ email: "will.suspend@x.com", password: "pw123456" });
+    expect(login.status).toBe(200);
+    expect(login.body.user.status).toBe("SUSPENDED");
+
+    const me = await request(app).get("/api/auth/me")
+      .set("Authorization", `Bearer ${login.body.token}`);
+    expect(me.status).toBe(403);
+  });
+
+  it("refuses a VIEWER token for suspend/restore/approve (403)", async () => {
+    const user = await approvedUser();
+    const viewer = { Authorization: `Bearer ${tokens.viewer()}` };
+
+    const suspendRes = await request(app).patch(`/api/auth/users/${user.id}/suspend`).set(viewer);
+    expect(suspendRes.status).toBe(403);
+
+    const restoreRes = await request(app).patch(`/api/auth/users/${user.id}/restore`).set(viewer);
+    expect(restoreRes.status).toBe(403);
+
+    const applicant = await pendingOwnerUser({ email: "viewer.blocked@x.com" });
+    const approveRes = await request(app).patch(`/api/auth/pending/${applicant.id}/approve`).set(viewer);
+    expect(approveRes.status).toBe(403);
+  });
+
+  // restoreUser must not become a backdoor APPROVED-promotion for an account
+  // that was never suspended — a PENDING applicant has not been vetted, and a
+  // REJECTED one was actively turned down.
+  it("refuses to restore an account that isn't SUSPENDED (409), and it stays PENDING", async () => {
+    const applicant = await pendingOwnerUser({ email: "restore.pending@x.com" });
+
+    const res = await request(app)
+      .patch(`/api/auth/users/${applicant.id}/restore`)
+      .set(adminAuth());
+    expect(res.status).toBe(409);
+
+    const after = await prisma.user.findUnique({ where: { id: applicant.id } });
+    expect(after.status).toBe("PENDING");
+  });
+
+  // The super-admin guard (by email) already blocked suspending the seeded
+  // super admin; this guards every ADMIN account by role, including a second
+  // one that isn't the super admin.
+  //
+  // resetCrudTables() deliberately never deletes ADMIN-role rows (so the one
+  // seeded admin always survives), so a row created here would otherwise leak
+  // across every future test run — clean it up in a finally regardless of
+  // outcome, and use a random (not counter-based) email so a run that somehow
+  // still leaves one behind can never collide with this one.
+  it("refuses to suspend an ADMIN target (409), and it stays APPROVED", async () => {
+    const otherAdmin = await prisma.user.create({
+      data: {
+        name: "Second Admin", email: `second.admin.${crypto.randomUUID()}@x.com`, role: "ADMIN",
+        status: "APPROVED", passwordHash: "x", passwordPlain: "x",
+      },
+    });
+
+    try {
+      const res = await request(app)
+        .patch(`/api/auth/users/${otherAdmin.id}/suspend`)
+        .set(adminAuth());
+      expect(res.status).toBe(409);
+
+      const after = await prisma.user.findUnique({ where: { id: otherAdmin.id } });
+      expect(after.status).toBe("APPROVED");
+    } finally {
+      await prisma.user.delete({ where: { id: otherAdmin.id } }).catch(() => {});
+    }
+  });
+});
+
+describe("Pending queue surfaces a suggested owner match", () => {
+  it("attaches a suggestedOwner hint when an imported owner's name matches", async () => {
+    const owner = await factory.owner({ name: "Maria Santos", nameKey: "maria santos" });
+    await pendingOwnerUser({ name: "Maria Santos", email: "maria.pending@x.com" });
+
+    const res = await request(app).get("/api/auth/pending").set(adminAuth());
+    expect(res.status).toBe(200);
+    const row = res.body.find((u) => u.email === "maria.pending@x.com");
+    expect(row.suggestedOwner).toMatchObject({ id: owner.id, name: "Maria Santos" });
+  });
+
+  it("suggestedOwner is null when no imported owner's name matches", async () => {
+    await pendingOwnerUser({ name: "Nobody Matching", email: "nomatch@x.com" });
+    const res = await request(app).get("/api/auth/pending").set(adminAuth());
+    const row = res.body.find((u) => u.email === "nomatch@x.com");
+    expect(row.suggestedOwner).toBeNull();
+  });
+});
+
+describe("Owner invitations", () => {
+  const officerAuth = () => ({ Authorization: `Bearer ${tokens.officer()}` });
+  const ownerAuth = () => ({ Authorization: `Bearer ${tokens.owner()}` });
+
+  // The route hands back the full URL (host included, when PUBLIC_BASE_URL is
+  // set) — pull the raw token back out of it the way a copy-pasting officer's
+  // browser would.
+  function tokenFromAcceptUrl(acceptUrl) {
+    return new URL(acceptUrl, "http://example.test").searchParams.get("token");
+  }
+
+  it("an officer creates an invite: 201 with a copyable acceptUrl; the DB row stores a hashed token and a future expiry", async () => {
+    const owner = await factory.owner({ name: "Juan Dela Cruz" });
+
+    const res = await request(app)
+      .post("/api/owner-invites")
+      .set(officerAuth())
+      .send({ unitOwnerId: owner.id, email: "juan@example.com" });
+
+    expect(res.status).toBe(201);
+    expect(typeof res.body.acceptUrl).toBe("string");
+    expect(res.body.acceptUrl).toContain("/accept-invite?token=");
+    expect(res.body.ownerName).toBe("Juan Dela Cruz");
+    expect(res.body.email).toBe("juan@example.com");
+
+    const token = tokenFromAcceptUrl(res.body.acceptUrl);
+    expect(token).toBeTruthy();
+
+    const row = await prisma.ownerInvite.findFirst({ where: { unitOwnerId: owner.id } });
+    expect(row).toBeTruthy();
+    // Only a hash is ever persisted — never the raw, emailed token.
+    expect(row.tokenHash).not.toBe(token);
+    expect(row.tokenHash).toBe(crypto.createHash("sha256").update(token).digest("hex"));
+    expect(row.expiresAt.getTime()).toBeGreaterThan(Date.now());
+  });
+
+  it("GET /owner-invites/:token returns the owner name + email for a live token; a bad token is 404", async () => {
+    const owner = await factory.owner({ name: "Maria Reyes" });
+    const create = await request(app)
+      .post("/api/owner-invites")
+      .set(officerAuth())
+      .send({ unitOwnerId: owner.id, email: "maria@example.com" });
+    const token = tokenFromAcceptUrl(create.body.acceptUrl);
+
+    const ok = await request(app).get(`/api/owner-invites/${token}`);
+    expect(ok.status).toBe(200);
+    expect(ok.body).toEqual({ ownerName: "Maria Reyes", email: "maria@example.com" });
+
+    const bad = await request(app).get("/api/owner-invites/not-a-real-token");
+    expect(bad.status).toBe(404);
+  });
+
+  it("accepting with a password creates an APPROVED UNIT_OWNER linked to the owner and consumes the invite; a second accept is 410", async () => {
+    const owner = await factory.owner({ name: "Pedro Santos" });
+    const create = await request(app)
+      .post("/api/owner-invites")
+      .set(officerAuth())
+      .send({ unitOwnerId: owner.id, email: "pedro@example.com" });
+    const token = tokenFromAcceptUrl(create.body.acceptUrl);
+
+    const accept = await request(app)
+      .post(`/api/owner-invites/${token}/accept`)
+      .send({ password: "longenough1" });
+    expect(accept.status).toBe(200);
+    expect(accept.body.token).toBeTruthy();
+    expect(accept.body.user).toMatchObject({
+      role: "UNIT_OWNER", status: "APPROVED", unitOwnerId: owner.id, email: "pedro@example.com",
+    });
+
+    const user = await prisma.user.findUnique({ where: { id: accept.body.user.id } });
+    expect(user).toMatchObject({ status: "APPROVED", role: "UNIT_OWNER", unitOwnerId: owner.id });
+
+    const after = await prisma.unitOwner.findUnique({ where: { id: owner.id } });
+    expect(after.email).toBe("pedro@example.com");
+
+    const invite = await prisma.ownerInvite.findFirst({ where: { unitOwnerId: owner.id } });
+    expect(invite.consumedAt).toBeTruthy();
+
+    const again = await request(app)
+      .post(`/api/owner-invites/${token}/accept`)
+      .send({ password: "longenough1" });
+    expect(again.status).toBe(410);
+  });
+
+  it("records the accept in the audit log without persisting the raw token as entityId", async () => {
+    const owner = await factory.owner({ name: "Lucia Fernandez" });
+    const create = await request(app)
+      .post("/api/owner-invites")
+      .set(officerAuth())
+      .send({ unitOwnerId: owner.id, email: "lucia@example.com" });
+    const token = tokenFromAcceptUrl(create.body.acceptUrl);
+
+    const accept = await request(app)
+      .post(`/api/owner-invites/${token}/accept`)
+      .send({ password: "longenough1" });
+    expect(accept.status).toBe(200);
+
+    await flushAudits();
+    const entry = await prisma.auditLog.findFirst({
+      where: { entity: "Owner Invite", action: "accept" },
+      orderBy: { createdAt: "desc" },
+    });
+    expect(entry).toBeTruthy();
+    expect(entry.action).toBe("accept");
+    // The raw, single-use secret must never land in persisted storage outside
+    // the OwnerInvite row itself (which only ever keeps a hash of it).
+    expect(entry.entityId).not.toBe(token);
+    expect(entry.entityId).toBeNull();
+  });
+
+  it("does not persist the raw invite token in the audit log's path either", async () => {
+    const owner = await factory.owner({ name: "Path Redaction Owner" });
+    const create = await request(app)
+      .post("/api/owner-invites")
+      .set(officerAuth())
+      .send({ unitOwnerId: owner.id, email: "path.redact@example.com" });
+    const token = tokenFromAcceptUrl(create.body.acceptUrl);
+
+    const accept = await request(app)
+      .post(`/api/owner-invites/${token}/accept`)
+      .send({ password: "longenough1" });
+    expect(accept.status).toBe(200);
+
+    await flushAudits();
+    const entry = await prisma.auditLog.findFirst({
+      where: { entity: "Owner Invite", action: "accept" },
+      orderBy: { createdAt: "desc" },
+    });
+    expect(entry).toBeTruthy();
+    // The path is a request-logging field, not an identifier column — but the
+    // raw single-use token was a PATH segment, so it leaked there too unless
+    // the middleware specifically redacts it to a template.
+    expect(entry.path).not.toContain(token);
+    expect(entry.path).toBe("/api/owner-invites/:token/accept");
+  });
+
+  it("an expired invite is 410", async () => {
+    const owner = await factory.owner({ name: "Ana Lim" });
+    const create = await request(app)
+      .post("/api/owner-invites")
+      .set(officerAuth())
+      .send({ unitOwnerId: owner.id, email: "ana@example.com" });
+    const token = tokenFromAcceptUrl(create.body.acceptUrl);
+
+    await prisma.ownerInvite.updateMany({
+      where: { unitOwnerId: owner.id },
+      data: { expiresAt: new Date(Date.now() - 1000) },
+    });
+
+    const res = await request(app).get(`/api/owner-invites/${token}`);
+    expect(res.status).toBe(410);
+  });
+
+  it("inviting an owner that already has an active account is 409", async () => {
+    const owner = await factory.owner({ name: "Taken Owner 2" });
+    await prisma.user.create({
+      data: {
+        name: "Already Has Login", email: "already.has.login@x.com", contactEmail: "already.has.login@x.com",
+        role: "UNIT_OWNER", status: "APPROVED", passwordHash: "x", passwordPlain: "x",
+        unitOwnerId: owner.id,
+      },
+    });
+
+    const res = await request(app)
+      .post("/api/owner-invites")
+      .set(officerAuth())
+      .send({ unitOwnerId: owner.id, email: "new.invite@x.com" });
+    expect(res.status).toBe(409);
+  });
+
+  it("inviting an owner whose only account is SUSPENDED is still 409 — suspension must not be bypassable by re-inviting", async () => {
+    const owner = await factory.owner({ name: "Suspended Owner" });
+    await prisma.user.create({
+      data: {
+        name: "Suspended Login", email: "suspended.login@x.com", contactEmail: "suspended.login@x.com",
+        role: "UNIT_OWNER", status: "SUSPENDED", passwordHash: "x", passwordPlain: "x",
+        unitOwnerId: owner.id,
+      },
+    });
+
+    const res = await request(app)
+      .post("/api/owner-invites")
+      .set(officerAuth())
+      .send({ unitOwnerId: owner.id, email: "new.invite.suspended@x.com" });
+    expect(res.status).toBe(409);
+  });
+
+  it("a non-staff token creating an invite is refused (403)", async () => {
+    const owner = await factory.owner({ name: "Blocked Owner" });
+    const res = await request(app)
+      .post("/api/owner-invites")
+      .set(ownerAuth())
+      .send({ unitOwnerId: owner.id, email: "blocked@x.com" });
+    expect(res.status).toBe(403);
+  });
+});
+
+describe("GET /api/owners/linkable — unscoped owner picker for the approval link-picker", () => {
+  const officerAuth = () => ({ Authorization: `Bearer ${tokens.officer()}` });
+
+  // listOwners (the plain GET /api/owners) scopes a LEASING_OFFICER to their
+  // own assignedOfficerId, which hides an unassigned imported owner from the
+  // approval screen's link-picker and pushes the officer toward minting a
+  // duplicate. /linkable must stay unscoped so every owner can be chosen.
+  it("an officer sees an owner that isn't assigned to them via /linkable, unlike the scoped list", async () => {
+    const owner = await factory.owner({ name: "Unassigned Import" }); // assignedOfficerId left null
+
+    const linkable = await request(app).get("/api/owners/linkable").set(officerAuth());
+    expect(linkable.status).toBe(200);
+    expect(linkable.body.some((o) => o.id === owner.id)).toBe(true);
+
+    const scoped = await request(app).get("/api/owners").set(officerAuth());
+    expect(scoped.status).toBe(200);
+    expect(scoped.body.some((o) => o.id === owner.id)).toBe(false);
+  });
+
+  it("refuses a non-staff-write token (UNIT_OWNER) with 403", async () => {
+    const res = await request(app)
+      .get("/api/owners/linkable")
+      .set({ Authorization: `Bearer ${tokens.owner()}` });
+    expect(res.status).toBe(403);
+  });
+});
+
+// The app-level findFirst guards in approveAccount/acceptInvite are the
+// friendly path for the common case, but under concurrency (READ COMMITTED,
+// no lock) two requests can both pass the guard before either commits. This
+// proves the DB-level backstop — see manual-migrations/
+// 2026-10-30-one-active-account-per-owner.sql — actually enforces the
+// invariant regardless of what application code does.
+describe("DB backstop: one active account per owner", () => {
+  it("rejects a second active user linked to an owner that already has one, at the database level (P2002)", async () => {
+    const owner = await factory.owner({ name: "DB Backstop Owner" });
+    await prisma.user.create({
+      data: {
+        name: "First Login", email: "db.backstop.first@x.com", contactEmail: "db.backstop.first@x.com",
+        role: "UNIT_OWNER", status: "APPROVED", passwordHash: "x", passwordPlain: "x",
+        unitOwnerId: owner.id,
+      },
+    });
+
+    await expect(prisma.user.create({
+      data: {
+        name: "Second Login", email: "db.backstop.second@x.com", contactEmail: "db.backstop.second@x.com",
+        role: "UNIT_OWNER", status: "APPROVED", passwordHash: "x", passwordPlain: "x",
+        unitOwnerId: owner.id,
+      },
+    })).rejects.toMatchObject({ code: "P2002" });
+  });
+});

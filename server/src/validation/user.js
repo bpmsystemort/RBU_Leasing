@@ -36,6 +36,13 @@ export const signupSchema = z.object({
   unit: pendingUnitSchema.optional(),
 });
 
+// Approving a PENDING UNIT_OWNER may optionally link to an owner already in
+// the system (e.g. imported from the legacy portfolio) instead of minting a
+// new one. Omitted/undefined keeps today's behavior of creating a new owner.
+export const approveSchema = z.object({
+  existingUnitOwnerId: z.string().optional(),
+});
+
 export const rejectAccountSchema = z.object({
   reason: z.string().min(1, "A reason is required"),
 });

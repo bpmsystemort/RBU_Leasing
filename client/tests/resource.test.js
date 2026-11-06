@@ -10,7 +10,7 @@ vi.mock("../src/lib/api.js", () => ({
 }));
 
 import { api } from "../src/lib/api.js";
-import { resource, appointments, unitListings, publicUnits } from "../src/lib/resource.js";
+import { resource, appointments, unitListings, publicUnits, units, leasingTransactions } from "../src/lib/resource.js";
 
 describe("resource factory", () => {
   it("list() GETs the path with params and returns data", async () => {
@@ -86,5 +86,41 @@ describe("unitListings + publicUnits", () => {
     const file = new Blob(["x"]);
     await unitListings.addPhoto("u1", file);
     expect(api.post).toHaveBeenCalledWith("/unit-listings/u1/photos", expect.any(FormData));
+  });
+});
+
+describe("unit availability, ownership and blocking clients", () => {
+  it("units.* hits the availability, assignment and history endpoints", async () => {
+    await units.setUnavailable("u1");
+    expect(api.patch).toHaveBeenCalledWith("/units/u1/unavailable");
+    await units.restore("u1");
+    expect(api.patch).toHaveBeenCalledWith("/units/u1/restore");
+    await units.releaseBlock("u1");
+    expect(api.patch).toHaveBeenCalledWith("/units/u1/release-block");
+    const res = await units.assignOwner("u1", { toOwnerId: "o2", reason: "Sold" });
+    expect(api.patch).toHaveBeenCalledWith("/units/u1/assign-owner", { toOwnerId: "o2", reason: "Sold" });
+    expect(res).toEqual({ id: "3" });
+    const history = await units.assignments("u1");
+    expect(api.get).toHaveBeenCalledWith("/units/u1/assignments");
+    expect(history).toEqual([{ id: "1" }]);
+  });
+
+  it("units.markReviewed PATCHes the mark-reviewed path and returns the unit", async () => {
+    const res = await units.markReviewed("u1");
+    expect(api.patch).toHaveBeenCalledWith("/units/u1/mark-reviewed");
+    expect(res).toEqual({ id: "3" });
+  });
+
+  it("units.markVacant PATCHes the mark-vacant path and returns the unit", async () => {
+    const res = await units.markVacant("u1");
+    expect(api.patch).toHaveBeenCalledWith("/units/u1/mark-vacant");
+    expect(res).toEqual({ id: "3" });
+  });
+
+  it("leasingTransactions.blockUnit / unblockUnit PATCH the block and unblock paths", async () => {
+    await leasingTransactions.blockUnit("t1");
+    expect(api.patch).toHaveBeenCalledWith("/leasing-transactions/t1/block");
+    await leasingTransactions.unblockUnit("t1");
+    expect(api.patch).toHaveBeenCalledWith("/leasing-transactions/t1/unblock");
   });
 });

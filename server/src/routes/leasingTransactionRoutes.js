@@ -39,6 +39,8 @@ router.patch("/:id/status", requireWrite, ctrl.setStatus);
 router.patch("/:id/advance", requireWrite, ctrl.advance);
 router.patch("/:id/return", requireWrite, ctrl.returnStage);
 router.patch("/:id/link", requireWrite, ctrl.link);
+router.patch("/:id/block", requireWrite, ctrl.blockUnit);
+router.patch("/:id/unblock", requireWrite, ctrl.unblockUnit);
 router.delete("/:id", requireRole("ADMIN"), ctrl.remove);
 
 export default router;

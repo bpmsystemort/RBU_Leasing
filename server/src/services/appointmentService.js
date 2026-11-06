@@ -1,9 +1,9 @@
 import { prisma } from "../lib/prisma.js";
-import { NotFoundError, InvalidReferenceError, ConflictError } from "../lib/errors.js";
+import { NotFoundError, InvalidReferenceError, ConflictError, ForbiddenError } from "../lib/errors.js";
 import {
   SCHEDULABLE_STAGES, isSchedulableStage, stageByKey, stageIndex, isFinalStage,
 } from "../../../shared/leasingStages.js";
-import { assertCanAccess } from "./leasingTransactionService.js";
+import { assertCanAccess, assertNoRivalOnRevival, releaseBlockForDeal, isDeadEarly } from "./leasingTransactionService.js";
 
 async function resolveName(user) {
   if (user?.userId) {
@@ -26,6 +26,13 @@ async function syncStageStatus(txn, stage, status) {
   if (stage === txn.stage) { patch.status = status; if (isFinalStage(stage)) patch.finalStatus = status; }
   await prisma.leasingTransaction.update({ where: { id: txn.id }, data: patch });
 }
+// A status written to the transaction's CURRENT stage can revive a deal that
+// ended early (a Not Interested viewing moving back to Proposed, Confirmed,
+// Pending...). Call this before any write, so a refusal leaves everything as it
+// was. A status for another stage only touches stageData, so it never revives.
+async function assertNoRivalOnSync(txn, stage, status) {
+  if (stage === txn.stage) await assertNoRivalOnRevival(txn, stage, status);
+}
 
 export async function listForTransaction(user, txnId) {
   await assertCanAccess(user, txnId); // 404 if not staff/owner/tenant
@@ -45,21 +52,29 @@ export async function scheduleAppointment(user, txnId, stage, body) {
   if (!isSchedulableStage(stage)) throw new InvalidReferenceError(`"${stage}" is not a schedulable stage`);
   const txn = await prisma.leasingTransaction.findUnique({ where: { id: txnId } });
   if (!txn) throw new NotFoundError("Transaction not found");
-  // Cannot schedule a stage the transaction has already moved past.
   if (stageIndex(stage) < stageIndex(txn.stage) && (txn.stageData?.[stage]?.completedAt)) {
     throw new ConflictError("That stage is already completed");
   }
+  // A unit viewing is proposed to the lessor for confirmation; every other
+  // schedulable visit is booked outright by staff.
+  const viewing = stage === "UNIT_VIEWING";
+  const status = viewing ? "Proposed" : "Scheduled";
+  await assertNoRivalOnSync(txn, stage, status);
   const appt = await prisma.appointment.upsert({
     where: { transactionId_stage: { transactionId: txnId, stage } },
     create: {
-      transactionId: txnId, stage, status: "Scheduled",
+      transactionId: txnId, stage, status,
       scheduledAt: new Date(body.scheduledAt), location: body.location ?? null, notes: body.notes ?? null,
+      proposedByRole: viewing ? user?.role ?? null : null,
       createdById: user?.userId || null, createdByName: await resolveName(user),
     },
-    update: { status: "Scheduled", scheduledAt: new Date(body.scheduledAt), location: body.location ?? null, notes: body.notes ?? null },
+    update: {
+      status, scheduledAt: new Date(body.scheduledAt), location: body.location ?? null, notes: body.notes ?? null,
+      proposedByRole: viewing ? user?.role ?? null : null, confirmedAt: null,
+    },
   });
-  await syncStageStatus(txn, stage, "Scheduled");
-  await logEvent(txnId, user, `${stageByKey(stage).label} scheduled for ${new Date(body.scheduledAt).toISOString()}`, stage);
+  await syncStageStatus(txn, stage, status);
+  await logEvent(txnId, user, `${stageByKey(stage).label} ${viewing ? "proposed" : "scheduled"} for ${new Date(body.scheduledAt).toISOString()}`, stage);
   return appt;
 }
 
@@ -76,6 +91,7 @@ async function txnOf(appt) {
 
 export async function reschedule(user, id, body) {
   const appt = await loadAppt(id);
+  if (appt.stage === "UNIT_VIEWING") throw new ConflictError("Use propose to change a viewing time");
   if (["Completed", "Cancelled"].includes(appt.status)) throw new ConflictError("This appointment is closed");
   const txn = await txnOf(appt);
   const updated = await prisma.appointment.update({
@@ -86,6 +102,52 @@ export async function reschedule(user, id, body) {
   await logEvent(txn.id, user, `${stageByKey(appt.stage).label} rescheduled to ${new Date(body.scheduledAt).toISOString()}`, appt.stage);
   return updated;
 }
+
+// The two "sides" of a viewing handshake: the lessor, and everyone on staff.
+function sideOf(role) {
+  return role === "UNIT_OWNER" ? "lessor" : "staff";
+}
+const HANDSHAKE_ROLES = ["ADMIN", "LEASING_OFFICER", "UNIT_OWNER"];
+
+// Confirm the OTHER side's proposed viewing time.
+export async function confirmViewing(user, id) {
+  if (!HANDSHAKE_ROLES.includes(user?.role)) throw new ForbiddenError("Not allowed to confirm this viewing");
+  const appt = await loadAppt(id);
+  const txn = await txnOf(appt);
+  await assertCanAccess(user, txn.id); // 404 unless staff or THIS txn's owner
+  if (appt.stage !== "UNIT_VIEWING") throw new ConflictError("Only a unit viewing is confirmed this way");
+  if (appt.status !== "Proposed") throw new ConflictError("This viewing is not awaiting confirmation");
+  if (sideOf(appt.proposedByRole) === sideOf(user.role)) {
+    throw new ConflictError("Awaiting the other party's confirmation, not yours");
+  }
+  await assertNoRivalOnSync(txn, appt.stage, "Confirmed");
+  const updated = await prisma.appointment.update({ where: { id }, data: { status: "Confirmed", confirmedAt: new Date() } });
+  await syncStageStatus(txn, appt.stage, "Confirmed");
+  await logEvent(txn.id, user, `Unit Viewing confirmed for ${new Date(appt.scheduledAt).toISOString()}`, appt.stage);
+  return updated;
+}
+
+// Propose a different viewing time (either side), flipping whose turn it is.
+export async function proposeViewing(user, id, body) {
+  if (!HANDSHAKE_ROLES.includes(user?.role)) throw new ForbiddenError("Not allowed to propose a viewing time");
+  const appt = await loadAppt(id);
+  const txn = await txnOf(appt);
+  await assertCanAccess(user, txn.id);
+  if (appt.stage !== "UNIT_VIEWING") throw new ConflictError("Only a unit viewing is proposed this way");
+  if (["Completed", "Cancelled"].includes(appt.status)) throw new ConflictError("This viewing is closed");
+  await assertNoRivalOnSync(txn, appt.stage, "Proposed");
+  const updated = await prisma.appointment.update({
+    where: { id },
+    data: {
+      status: "Proposed", proposedByRole: user.role, confirmedAt: null,
+      scheduledAt: new Date(body.scheduledAt), location: body.location ?? appt.location, notes: body.notes ?? appt.notes,
+    },
+  });
+  await syncStageStatus(txn, appt.stage, "Proposed");
+  await logEvent(txn.id, user, `Unit Viewing time proposed for ${new Date(body.scheduledAt).toISOString()}`, appt.stage);
+  return updated;
+}
+
 export async function complete(user, id, body) {
   const appt = await loadAppt(id);
   if (appt.status === "Completed") throw new ConflictError("Already completed");
@@ -95,15 +157,20 @@ export async function complete(user, id, body) {
   const allowed = cfg.outcomeOptions ?? [cfg.defaultOutcome];
   if (!allowed.includes(outcome)) throw new InvalidReferenceError(`"${outcome}" is not a valid result for this stage`);
   const txn = await txnOf(appt);
-  const updated = await prisma.appointment.update({ where: { id }, data: { status: "Completed", outcome } });
   // The shoot itself completed — but with nobody in view the stage rests at
   // Awaiting Prospect, so the board tells "live and being marketed" apart from
   // "just shot".
   const stageStatus = appt.stage === "PHOTOSHOOT" && outcome === "Completed" && !txn.tenantId
     ? "Awaiting Prospect"
     : outcome;
+  await assertNoRivalOnSync(txn, appt.stage, stageStatus);
+  const updated = await prisma.appointment.update({ where: { id }, data: { status: "Completed", outcome } });
   await syncStageStatus(txn, appt.stage, stageStatus);
   await logEvent(txn.id, user, `${stageByKey(appt.stage).label} completed — ${outcome}`, appt.stage);
+  // "Not Interested" ends the deal, so the unit it was holding goes back on the market.
+  if (appt.stage === txn.stage && isDeadEarly({ stage: appt.stage, status: stageStatus })) {
+    await releaseBlockForDeal(user, txn.id, appt.stage);
+  }
   return updated;
 }
 export async function cancel(user, id, body) {
@@ -111,6 +178,7 @@ export async function cancel(user, id, body) {
   if (["Completed", "Cancelled"].includes(appt.status)) throw new ConflictError("This appointment is closed");
   const status = body.status || "Cancelled";
   const txn = await txnOf(appt);
+  await assertNoRivalOnSync(txn, appt.stage, "Pending");
   const updated = await prisma.appointment.update({ where: { id }, data: { status, reason: body.reason ?? null } });
   await syncStageStatus(txn, appt.stage, "Pending");
   await logEvent(txn.id, user, `${stageByKey(appt.stage).label} ${status.toLowerCase()}${body.reason ? ` — ${body.reason}` : ""}`, appt.stage);

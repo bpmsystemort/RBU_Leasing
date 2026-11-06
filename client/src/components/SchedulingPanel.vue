@@ -41,6 +41,14 @@ const current = computed(() => rows.value.find((a) => a.stage === targetStage.va
 const active = computed(() => current.value && !["Cancelled", "No-show"].includes(current.value.status));
 const isDone = computed(() => current.value && current.value.status === "Completed");
 
+const isViewing = computed(() => targetStage.value === "UNIT_VIEWING");
+// For a viewing, "active" must include a Proposed/Confirmed row (not just Scheduled).
+const hasOutcomeSelect = computed(() => ["UNIT_INSPECTION", "UNIT_VIEWING"].includes(targetStage.value));
+// The lessor proposed the current time → staff may confirm it.
+const canConfirm = computed(() => isViewing.value && current.value?.status === "Proposed" && current.value?.proposedByRole === "UNIT_OWNER");
+// We proposed and are waiting on the lessor.
+const awaitingLessor = computed(() => isViewing.value && current.value?.status === "Proposed" && current.value?.proposedByRole !== "UNIT_OWNER");
+
 async function load() {
   if (!props.transaction?.id) return;
   try {
@@ -48,7 +56,7 @@ async function load() {
   } catch (e) {
     error.value = e.response?.data?.error || "Could not load appointments";
   }
-  if (targetStage.value === "UNIT_INSPECTION" && !outcome.value) {
+  if (hasOutcomeSelect.value && !outcome.value) {
     outcome.value = stageCfg.value?.outcomeOptions?.[0] || "";
   }
 }
@@ -95,17 +103,33 @@ async function reschedule() {
   error.value = "";
   busy.value = true;
   try {
-    await appointments.reschedule(current.value.id, {
+    const body = {
       scheduledAt: new Date(scheduledAt.value).toISOString(),
       location: location.value || null,
       notes: notes.value || null,
-    });
+    };
+    if (isViewing.value) await appointments.propose(current.value.id, body);
+    else await appointments.reschedule(current.value.id, body);
     rescheduling.value = false;
     resetFormFields();
     await load();
     emit("changed");
   } catch (e) {
-    error.value = e.response?.data?.error || "Could not reschedule the appointment";
+    error.value = e.response?.data?.error || "Could not update the appointment";
+  } finally {
+    busy.value = false;
+  }
+}
+
+async function confirmViewing() {
+  error.value = "";
+  busy.value = true;
+  try {
+    await appointments.confirm(current.value.id);
+    await load();
+    emit("changed");
+  } catch (e) {
+    error.value = e.response?.data?.error || "Could not confirm the viewing";
   } finally {
     busy.value = false;
   }
@@ -115,7 +139,7 @@ async function complete() {
   error.value = "";
   busy.value = true;
   try {
-    const body = targetStage.value === "UNIT_INSPECTION" ? { outcome: outcome.value } : {};
+    const body = hasOutcomeSelect.value ? { outcome: outcome.value } : {};
     await appointments.complete(current.value.id, body);
     await load();
     emit("changed");
@@ -188,7 +212,7 @@ function formatTime(iso) {
           <textarea rows="2" v-model="notes"></textarea>
         </div>
         <div class="actions">
-          <button type="button" class="primary" :disabled="busy || !scheduledAt" @click="schedule">Schedule</button>
+          <button type="button" class="primary" :disabled="busy || !scheduledAt" @click="schedule">{{ isViewing ? "Propose time" : "Schedule" }}</button>
         </div>
       </div>
 
@@ -210,15 +234,19 @@ function formatTime(iso) {
         </dl>
 
         <template v-if="!isDone">
-          <div v-if="targetStage === 'UNIT_INSPECTION'" class="field">
+          <div v-if="hasOutcomeSelect" class="field">
             <label>Outcome</label>
             <select v-model="outcome">
               <option v-for="o in stageCfg.outcomeOptions" :key="o" :value="o">{{ o }}</option>
             </select>
           </div>
+          <p v-if="awaitingLessor" class="muted">Awaiting the lessor's confirmation of this time.</p>
+          <div v-if="canConfirm" class="actions">
+            <button type="button" class="primary" :disabled="busy" @click="confirmViewing">Confirm</button>
+          </div>
           <div class="actions">
-            <button type="button" class="ghost" :disabled="busy" @click="openReschedule">Reschedule</button>
-            <button type="button" class="primary" :disabled="busy" @click="complete">Complete</button>
+            <button type="button" class="ghost" :disabled="busy" @click="openReschedule">{{ isViewing ? "Propose another time" : "Reschedule" }}</button>
+            <button type="button" class="primary" v-if="!isViewing || current.status === 'Confirmed'" :disabled="busy" @click="complete">Complete</button>
             <button type="button" class="danger" :disabled="busy" @click="openCancel">Cancel / No-show</button>
           </div>
         </template>
@@ -238,7 +266,7 @@ function formatTime(iso) {
           </div>
           <div class="actions">
             <button type="button" class="ghost" :disabled="busy" @click="cancelReschedule">Cancel</button>
-            <button type="button" class="primary" :disabled="busy || !scheduledAt" @click="reschedule">Save reschedule</button>
+            <button type="button" class="primary" :disabled="busy || !scheduledAt" @click="reschedule">{{ isViewing ? "Send proposal" : "Save reschedule" }}</button>
           </div>
         </div>
 

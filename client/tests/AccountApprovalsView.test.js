@@ -14,10 +14,14 @@ vi.mock("../src/lib/resource.js", () => ({
     reject: vi.fn(() => Promise.resolve({})),
     revise: vi.fn(() => Promise.resolve({})),
   },
+  owners: {
+    linkable: vi.fn(() => Promise.resolve([])),
+  },
 }));
 
 import AccountApprovalsView from "../src/views/AccountApprovalsView.vue";
-import { pendingAccounts } from "../src/lib/resource.js";
+import { pendingAccounts, owners } from "../src/lib/resource.js";
+import { useAuthStore } from "../src/stores/auth.js";
 
 async function mountView() {
   const w = mount(AccountApprovalsView);
@@ -28,13 +32,19 @@ const btnIn = (row, label) => row.findAll("button").find((b) => b.text() === lab
 
 describe("AccountApprovalsView", () => {
   beforeEach(() => {
-    // The view syncs the top-bar indicator, so it needs a live pinia.
+    // The view syncs the top-bar indicator, so it needs a live pinia. Every
+    // real visitor to this page is an ADMIN or LEASING_OFFICER (the router
+    // allows no one else in) — give every test the same session so the
+    // owner-linking control (gated on auth.canWrite) renders by default.
     setActivePinia(createPinia());
+    useAuthStore().setSession({ token: "t", user: { role: "ADMIN" } });
     pendingAccounts.list.mockClear();
     pendingAccounts.approve.mockClear();
     pendingAccounts.reject.mockClear();
     pendingAccounts.revise.mockClear();
     pendingAccounts.list.mockResolvedValue(ROWS);
+    owners.linkable.mockClear();
+    owners.linkable.mockResolvedValue([]);
   });
 
   it("lists the applications with the details needed to vet them", async () => {
@@ -181,5 +191,105 @@ describe("AccountApprovalsView", () => {
     await w.get('[data-test="revise-confirm"]').trigger("click");
     await flushPromises();
     expect(pendingAccounts.revise).not.toHaveBeenCalled();
+  });
+
+  // The officer can link a self-registered lessor to an owner already in the
+  // system (e.g. imported) instead of minting a duplicate. The picker
+  // defaults to the server's suggested match but stays editable.
+  it("defaults the owner picker to the suggested match and approves with that owner id", async () => {
+    const suggested = { id: "owner-1", name: "Juan Cruz" };
+    pendingAccounts.list.mockResolvedValue([
+      { id: "o1", name: "Juan Cruz", email: "juan.owner", contactEmail: "juan@x.com", role: "UNIT_OWNER",
+        createdAt: new Date().toISOString(), pendingUnit: null, suggestedOwner: suggested },
+    ]);
+    owners.linkable.mockResolvedValue([suggested, { id: "owner-2", name: "Ana Reyes" }]);
+
+    const w = await mountView();
+    // The picker's options must come from the unscoped linkable() endpoint —
+    // list() is scoped to the signed-in officer's own assigned owners, which
+    // would hide an unassigned imported owner from this very picker.
+    expect(owners.linkable).toHaveBeenCalled();
+    const row = w.findAll("tbody tr")[0];
+    const select = row.find(".owner-select");
+    expect(select.exists()).toBe(true);
+    expect(select.element.value).toBe("owner-1");
+
+    await btnIn(row, "Approve").trigger("click");
+    await flushPromises();
+    expect(pendingAccounts.approve).toHaveBeenCalledWith("o1", "owner-1");
+  });
+
+  // owners.linkable() is unscoped, so in the ordinary case it already
+  // includes the suggested match. But the row's suggestedOwner must be
+  // choosable regardless of what the fetched list happens to contain —
+  // otherwise a <select> bound to it would render with no matching <option>
+  // and silently show blank instead of the server's own suggested match.
+  it("always offers the row's suggested owner as a pick option, even if the fetched list omits it", async () => {
+    const suggested = { id: "owner-1", name: "Juan Cruz" };
+    pendingAccounts.list.mockResolvedValue([
+      { id: "o1", name: "Juan Cruz", email: "juan.owner", contactEmail: "juan@x.com", role: "UNIT_OWNER",
+        createdAt: new Date().toISOString(), pendingUnit: null, suggestedOwner: suggested },
+    ]);
+    // linkable() returns owners that do NOT include the suggested match.
+    owners.linkable.mockResolvedValue([{ id: "owner-2", name: "Ana Reyes" }]);
+
+    const w = await mountView();
+    const row = w.findAll("tbody tr")[0];
+    const select = row.find(".owner-select");
+    const optionValues = select.findAll("option").map((o) => o.element.value);
+    expect(optionValues).toContain("owner-1");
+    expect(select.element.value).toBe("owner-1");
+
+    await btnIn(row, "Approve").trigger("click");
+    await flushPromises();
+    expect(pendingAccounts.approve).toHaveBeenCalledWith("o1", "owner-1");
+  });
+
+  // ownerSearch and ownerPick are independent state. If a search excludes the
+  // already-picked owner, the <select> must still show it selected — never
+  // blank — so Approve never submits an owner the officer can no longer see.
+  it("keeps the picked owner visible and selected when the search excludes it", async () => {
+    const suggested = { id: "owner-1", name: "Juan Cruz" };
+    pendingAccounts.list.mockResolvedValue([
+      { id: "o1", name: "Juan Cruz", email: "juan.owner", contactEmail: "juan@x.com", role: "UNIT_OWNER",
+        createdAt: new Date().toISOString(), pendingUnit: null, suggestedOwner: suggested },
+    ]);
+    owners.linkable.mockResolvedValue([suggested, { id: "owner-2", name: "Ana Reyes" }]);
+
+    const w = await mountView();
+    const row = w.findAll("tbody tr")[0];
+    const select = row.find(".owner-select");
+    expect(select.element.value).toBe("owner-1");
+
+    // Search text that matches no owner's name, including the picked one.
+    await row.find(".owner-search").setValue("zzz-no-match");
+    await flushPromises();
+
+    const optionValues = select.findAll("option").map((o) => o.element.value);
+    expect(optionValues).toContain("owner-1");
+    expect(select.element.value).toBe("owner-1");
+
+    await btnIn(row, "Approve").trigger("click");
+    await flushPromises();
+    expect(pendingAccounts.approve).toHaveBeenCalledWith("o1", "owner-1");
+  });
+
+  // Leaving the picker unset must keep today's behavior (a new owner is
+  // created) — and say so, rather than leaving the officer to guess.
+  it("approves with no owner id when the picker is left unset, and warns a new owner will be created", async () => {
+    pendingAccounts.list.mockResolvedValue([
+      { id: "o2", name: "New Applicant", email: "new.applicant", contactEmail: "new@x.com", role: "UNIT_OWNER",
+        createdAt: new Date().toISOString(), pendingUnit: null, suggestedOwner: null },
+    ]);
+    owners.linkable.mockResolvedValue([{ id: "owner-2", name: "Ana Reyes" }]);
+
+    const w = await mountView();
+    const row = w.findAll("tbody tr")[0];
+    expect(row.find(".owner-select").element.value).toBe("");
+    expect(row.text()).toContain("new owner will be created");
+
+    await btnIn(row, "Approve").trigger("click");
+    await flushPromises();
+    expect(pendingAccounts.approve).toHaveBeenCalledWith("o2");
   });
 });

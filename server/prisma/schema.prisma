@@ -15,6 +15,7 @@ enum AccountStatus {
   FOR_REVISION
   APPROVED
   REJECTED
+  SUSPENDED
 }
 
 enum Role {
@@ -35,6 +36,8 @@ enum UnitApprovalStatus {
 enum UnitStatus {
   VACANT
   OCCUPIED
+  BLOCKED
+  UNAVAILABLE
 }
 
 enum LeaseStatus {
@@ -110,18 +113,44 @@ model User {
 model UnitOwner {
   id         String                @id @default(cuid())
   name       String
+  nameKey    String?
   email      String?
   phone      String?
   address    String?
   assignedOfficer   User?          @relation("OwnerOfficer", fields: [assignedOfficerId], references: [id], onDelete: SetNull)
   assignedOfficerId String?
+  needsReview Boolean               @default(false)
   units      Unit[]
   users      User[]
   lessorInfoSheets LessorInfoSheet[]
   leasingTransactions LeasingTransaction[]
   lessorRequirements LessorRequirement[]
+  invites    OwnerInvite[]
+  assignmentsFrom UnitAssignmentEvent[] @relation("AssignmentFrom")
+  assignmentsTo   UnitAssignmentEvent[] @relation("AssignmentTo")
   createdAt  DateTime              @default(now())
   updatedAt  DateTime              @updatedAt
+
+  @@unique([nameKey])
+}
+
+// A pending email invitation for a lessor to activate a portal account for a
+// UnitOwner. `tokenHash` stores a hash of the one-time token sent by email
+// (the raw token is never persisted); `consumedAt` is set once the invite is
+// used to create/activate the account.
+model OwnerInvite {
+  id            String    @id @default(cuid())
+  unitOwner     UnitOwner @relation(fields: [unitOwnerId], references: [id], onDelete: Cascade)
+  unitOwnerId   String
+  email         String
+  tokenHash     String    @unique
+  expiresAt     DateTime
+  consumedAt    DateTime?
+  createdById   String?
+  createdByName String?
+  createdAt     DateTime  @default(now())
+
+  @@index([unitOwnerId])
 }
 
 model LessorInfoSheet {
@@ -183,6 +212,7 @@ model Unit {
   owner      UnitOwner  @relation(fields: [ownerId], references: [id])
   ownerId    String
   unitNumber String
+  unitKey    String?
   building   String?
   tower      Tower?     @relation(fields: [towerId], references: [id])
   towerId    String?
@@ -194,13 +224,44 @@ model Unit {
   status     UnitStatus @default(VACANT)
   approvalStatus UnitApprovalStatus @default(APPROVED)
   reviewRemarks  String?
+  needsStatusReview Boolean @default(false)
+  // When staff said "the status is right" to an import flag; the importer will not raise it
+  // again until a current lease has come and gone. See manual-migrations/2026-11-06-unit-status-reviewed.sql.
+  statusReviewedAt DateTime?
+  // The transaction currently holding this unit in BLOCKED status; cleared
+  // (SetNull) if that transaction is deleted. See manual-migrations/2026-11-03-units-blocking-2-block-and-assignments.sql.
+  blockedByTransactionId String?
+  blockedByTransaction   LeasingTransaction? @relation("UnitBlock", fields: [blockedByTransactionId], references: [id], onDelete: SetNull)
   leases     Lease[]
-  leasingTransactions LeasingTransaction[]
+  leasingTransactions LeasingTransaction[] @relation("TxnUnit")
   inquiries           Inquiry[]
   photos     UnitPhoto[]
   listing    UnitListing?
+  assignmentEvents UnitAssignmentEvent[]
   createdAt  DateTime   @default(now())
   updatedAt  DateTime   @updatedAt
+
+  @@unique([ownerId, unitKey])
+  @@index([blockedByTransactionId])
+}
+
+// Append-only history of a unit moving between owners. `fromOwnerId` is null
+// for the first assignment. Rows go with the unit (Cascade); an owner that
+// appears as the destination of a move cannot be deleted (Restrict).
+model UnitAssignmentEvent {
+  id          String     @id @default(cuid())
+  unit        Unit       @relation(fields: [unitId], references: [id], onDelete: Cascade)
+  unitId      String
+  fromOwner   UnitOwner? @relation("AssignmentFrom", fields: [fromOwnerId], references: [id], onDelete: SetNull)
+  fromOwnerId String?
+  toOwner     UnitOwner  @relation("AssignmentTo", fields: [toOwnerId], references: [id], onDelete: Restrict)
+  toOwnerId   String
+  actorId     String?
+  actorName   String?
+  reason      String?
+  createdAt   DateTime   @default(now())
+
+  @@index([unitId])
 }
 
 model UnitPhoto {
@@ -237,6 +298,7 @@ model UnitListing {
 model Tenant {
   id           String        @id @default(cuid())
   name         String
+  nameKey      String?
   email        String?
   phone        String?
   address      String?
@@ -248,6 +310,8 @@ model Tenant {
   lesseeRequirements LesseeRequirement[]
   createdAt    DateTime      @default(now())
   updatedAt    DateTime      @updatedAt
+
+  @@unique([nameKey])
 }
 
 // Admin-built forms (CMS). `fields` is a JSON array of field definitions
@@ -348,6 +412,8 @@ model Lease {
   managedBy       String?
   createdAt   DateTime    @default(now())
   updatedAt   DateTime    @updatedAt
+
+  @@unique([unitId, tenantId, startDate, endDate])
 }
 
 model Inquiry {
@@ -386,7 +452,7 @@ model LeasingTransaction {
 
   inquiry     Inquiry?   @relation(fields: [inquiryId], references: [id])
   inquiryId   String?    @unique
-  unit        Unit?      @relation(fields: [unitId], references: [id])
+  unit        Unit?      @relation("TxnUnit", fields: [unitId], references: [id])
   unitId      String?
   tenant      Tenant?    @relation(fields: [tenantId], references: [id])
   tenantId    String?
@@ -395,6 +461,7 @@ model LeasingTransaction {
   assignedOfficer   User? @relation("TxnOfficer", fields: [assignedOfficerId], references: [id])
   assignedOfficerId String?
 
+  blockedUnits Unit[]    @relation("UnitBlock")
   events      TransactionEvent[]
   documents   TransactionDocument[]
   approvalSteps ApprovalStep[]
@@ -471,6 +538,10 @@ model Appointment {
   outcome         String?
   reason          String?
   rescheduleCount Int      @default(0)
+  // Officer↔lessor viewing handshake: who made the current proposal
+  // (LEASING_OFFICER/ADMIN vs UNIT_OWNER) and when the other side confirmed.
+  proposedByRole String?
+  confirmedAt    DateTime?
   createdById     String?
   createdByName   String?
   createdAt       DateTime @default(now())
@@ -519,4 +590,21 @@ model LesseeRequirement {
   updatedAt      DateTime  @updatedAt
 
   @@unique([tenantId, requirementKey])
+}
+
+// Singleton row (id is always "singleton", enforced by the service, not the
+// DB) holding the admin-configurable outbound-email settings. Non-secret
+// only — MAIL_USER/MAIL_PASS stay in server/.env and are never stored here.
+// See manual-migrations/2026-10-30-email-settings.sql.
+model EmailSettings {
+  id            String   @id @default("singleton")
+  enabled       Boolean  @default(false)
+  host          String?
+  port          Int      @default(587)
+  secure        Boolean  @default(false)
+  fromAddress   String?
+  fromName      String?
+  updatedById   String?
+  updatedByName String?
+  updatedAt     DateTime @updatedAt
 }

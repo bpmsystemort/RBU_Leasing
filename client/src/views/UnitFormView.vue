@@ -1,10 +1,14 @@
 <script setup>
-import { ref, reactive, onMounted } from "vue";
-import { useRoute, useRouter } from "vue-router";
+import { ref, reactive, computed, onMounted } from "vue";
+import { useRoute, useRouter, RouterLink } from "vue-router";
 import { units, owners, estates, towers } from "../lib/resource.js";
+import { useAuthStore } from "../stores/auth.js";
 
 const route = useRoute();
 const router = useRouter();
+// Moving a unit to another owner is a recorded reassignment (admins only), not an edit.
+const auth = useAuthStore();
+const canReassign = computed(() => auth.role === "ADMIN");
 const id = route.params.id;
 const isEdit = !!id;
 const error = ref("");
@@ -78,10 +82,16 @@ async function submit() {
     <form @submit.prevent="submit">
       <div class="field">
         <label for="ownerId">Owner</label>
-        <select id="ownerId" v-model="form.ownerId">
+        <!-- Locked when editing; the unchanged ownerId is still sent (the server drops an unchanged owner). -->
+        <select id="ownerId" v-model="form.ownerId" :disabled="isEdit">
           <option value="">— select —</option>
           <option v-for="o in ownerOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
         </select>
+        <p v-if="isEdit" class="owner-note">
+          To change the owner use
+          <RouterLink v-if="canReassign" :to="`/app/unit-assignments?unit=${id}`">Unit-Owner Assignments</RouterLink>
+          <template v-else>Unit-Owner Assignments</template>
+        </p>
       </div>
 
       <div class="field">
@@ -126,3 +136,7 @@ async function submit() {
     </form>
   </section>
 </template>
+
+<style scoped>
+.owner-note { margin: 0.3rem 0 0; font-size: 0.8rem; color: var(--muted); }
+</style>

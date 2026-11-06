@@ -12,9 +12,25 @@ export function resource(path) {
 
 export const owners = resource("/owners");
 owners.profile = (id) => api.get(`/owners/${id}/profile`).then((r) => r.data);
+// Unscoped owner list for the account-approval link-picker — owners.list()
+// is scoped to the signed-in LEASING_OFFICER's own assigned owners, which
+// would hide an unassigned imported owner from that picker.
+owners.linkable = () => api.get("/owners/linkable").then((r) => r.data);
 export function ownerMe() { return api.get("/owners/me").then((r) => r.data); }
 export function tenantMe() { return api.get("/tenants/me").then((r) => r.data); }
 export const units = resource("/units");
+// Availability + ownership: staff set a VACANT unit unavailable (and restore it),
+// release a stale block, and ADMIN reassigns the owner with a recorded reason.
+units.setUnavailable = (id) => api.patch(`/units/${id}/unavailable`).then((r) => r.data);
+units.restore = (id) => api.patch(`/units/${id}/restore`).then((r) => r.data);
+units.releaseBlock = (id) => api.patch(`/units/${id}/release-block`).then((r) => r.data);
+// Clears the "needs status review" flag import v2 puts on a unit; returns the unit.
+units.markReviewed = (id) => api.patch(`/units/${id}/mark-reviewed`).then((r) => r.data);
+// A flagged OCCUPIED unit with no current lease is empty: set it VACANT (and clear the flag).
+units.markVacant = (id) => api.patch(`/units/${id}/mark-vacant`).then((r) => r.data);
+units.assignOwner = (id, { toOwnerId, reason }) =>
+  api.patch(`/units/${id}/assign-owner`, { toOwnerId, reason }).then((r) => r.data);
+units.assignments = (id) => api.get(`/units/${id}/assignments`).then((r) => r.data);
 export const tenants = resource("/tenants");
 export const leases = resource("/leases");
 export const estates = resource("/estates");
@@ -47,6 +63,9 @@ export const leasingTransactions = {
   returnStage: (id, data) => api.patch(`/leasing-transactions/${id}/return`, data || {}).then((r) => r.data),
   link: (id, data) => api.patch(`/leasing-transactions/${id}/link`, data).then((r) => r.data),
   remove: (id) => api.delete(`/leasing-transactions/${id}`).then((r) => r.data),
+  // unit reservation: a prospect's deal holds (blocks) its unit until released or signed
+  blockUnit: (id) => api.patch(`/leasing-transactions/${id}/block`).then((r) => r.data),
+  unblockUnit: (id) => api.patch(`/leasing-transactions/${id}/unblock`).then((r) => r.data),
   mine: () => api.get("/leasing-transactions/mine").then((r) => r.data),
   getMine: (id) => api.get(`/leasing-transactions/mine/${id}`).then((r) => r.data),
   // supporting documents
@@ -88,7 +107,11 @@ export function createUser(payload) {
 // decision. Approving is what creates the linked Owner/Tenant record.
 export const pendingAccounts = {
   list: () => api.get("/auth/pending").then((r) => r.data),
-  approve: (id) => api.patch(`/auth/pending/${id}/approve`).then((r) => r.data),
+  // existingUnitOwnerId links this applicant to an owner already in the
+  // system (e.g. imported) instead of minting a new one; omit it to keep
+  // the original create-a-new-owner behavior.
+  approve: (id, existingUnitOwnerId) =>
+    api.patch(`/auth/pending/${id}/approve`, existingUnitOwnerId ? { existingUnitOwnerId } : {}).then((r) => r.data),
   reject: (id, reason) => api.patch(`/auth/pending/${id}/reject`, { reason }).then((r) => r.data),
   revise: (id, remarks) => api.patch(`/auth/pending/${id}/revise`, { remarks }).then((r) => r.data),
 };
@@ -102,11 +125,19 @@ export function updateUser(id, payload) {
 export function deleteUser(id) {
   return api.delete(`/auth/users/${id}`).then((r) => r.data);
 }
+// Suspend/restore a login — reversible and lower-stakes than edit/delete, so
+// ADMIN or LEASING_OFFICER may act on them (mirrors the server's own gate).
+export const accounts = {
+  suspend: (id) => api.patch(`/auth/users/${id}/suspend`).then((r) => r.data),
+  restore: (id) => api.patch(`/auth/users/${id}/restore`).then((r) => r.data),
+};
 
 export const appointments = {
   forTransaction: (txnId) => api.get(`/appointments/transaction/${txnId}`).then((r) => r.data),
   mine: () => api.get("/appointments/mine").then((r) => r.data),
   schedule: (txnId, stage, body) => api.post(`/appointments/transaction/${txnId}/${stage}`, body).then((r) => r.data),
+  confirm: (id) => api.patch(`/appointments/${id}/confirm`).then((r) => r.data),
+  propose: (id, body) => api.patch(`/appointments/${id}/propose`, body).then((r) => r.data),
   reschedule: (id, body) => api.patch(`/appointments/${id}/reschedule`, body).then((r) => r.data),
   complete: (id, body) => api.patch(`/appointments/${id}/complete`, body).then((r) => r.data),
   cancel: (id, body) => api.patch(`/appointments/${id}/cancel`, body).then((r) => r.data),
@@ -128,6 +159,12 @@ export const lessorRequirements = {
     const res = await api.get(`/lessor-requirements/${id}/download`, { responseType: "blob" });
     return res.data;
   },
+};
+
+// Admin bulk portfolio upload (.xlsx) — see PortfolioImportView.
+export const portfolioImport = {
+  preview: (file) => { const f = new FormData(); f.append("file", file); return api.post("/import/portfolio/preview", f).then((r) => r.data); },
+  commit: (file) => { const f = new FormData(); f.append("file", file); return api.post("/import/portfolio/commit", f).then((r) => r.data); },
 };
 
 // The lessee's document checklist — the mirror of lessorRequirements above.
@@ -184,4 +221,19 @@ export const publicRefs = {
 export const application = {
   get: () => api.get("/auth/application").then((r) => r.data),
   resubmit: (unit) => api.patch("/auth/application", { unit }).then((r) => r.data),
+};
+
+// Owner-portal invitations: staff invite an owner by email (create), the
+// public accept page reads the invite (get) and the owner sets a password
+// (accept) to receive an APPROVED UNIT_OWNER session.
+export const ownerInvites = {
+  create: (unitOwnerId, email) => api.post("/owner-invites", { unitOwnerId, email }).then((r) => r.data),
+  get: (token) => api.get(`/owner-invites/${token}`).then((r) => r.data),
+  accept: (token, password) => api.post(`/owner-invites/${token}/accept`, { password }).then((r) => r.data),
+};
+
+export const emailSettings = {
+  get: () => api.get("/settings/email").then((r) => r.data),
+  save: (data) => api.put("/settings/email", data).then((r) => r.data),
+  test: (to) => api.post("/settings/email/test", { to }).then((r) => r.data),
 };

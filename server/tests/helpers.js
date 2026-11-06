@@ -4,6 +4,7 @@ import { issueToken } from "../src/services/authService.js";
 // Delete in FK-safe order (children before parents). Removes every test-created
 // login (the seeded ADMIN is the only ADMIN, so it survives).
 export async function resetCrudTables() {
+  await prisma.unitAssignmentEvent.deleteMany();
   await prisma.auditLog.deleteMany();
   // Leasing transactions reference inquiries/units/users, so clear them first.
   await prisma.transactionEvent.deleteMany();
@@ -20,6 +21,9 @@ export async function resetCrudTables() {
   await prisma.unitOwner.deleteMany();
   await prisma.tower.deleteMany();
   await prisma.estate.deleteMany();
+  // No FK relations — standalone singleton row. Cleared so every test starts
+  // with no EmailSettings row (service falls back to env config).
+  await prisma.emailSettings.deleteMany();
 }
 
 export const tokens = {

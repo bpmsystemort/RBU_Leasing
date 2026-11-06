@@ -10,6 +10,19 @@ export function listOwners(user) {
   return prisma.unitOwner.findMany({ where, orderBy: { createdAt: "desc" }, include: officerInclude });
 }
 
+// Every owner, deliberately unscoped — for the account-approval link-picker
+// (AccountApprovalsView), where an officer must be able to link an applicant
+// to ANY imported owner, not just the ones already assigned to them. Scoping
+// this the way listOwners does would hide an unassigned imported owner from
+// the very picker meant to let staff link to it, pushing them toward minting
+// a duplicate owner instead. Minimal shape — the picker needs nothing else.
+export function listOwnersForLinking() {
+  return prisma.unitOwner.findMany({
+    orderBy: { createdAt: "desc" },
+    select: { id: true, name: true, email: true },
+  });
+}
+
 // Assign an owner to an O-Lease (LEASING_OFFICER), or null to unassign.
 export async function assignOwner(id, assignedOfficerId) {
   await getOwner(id);
@@ -47,5 +60,9 @@ export async function removeOwner(id) {
   await getOwner(id);
   const units = await prisma.unit.count({ where: { ownerId: id } });
   if (units > 0) throw new ConflictError(`Owner has ${units} unit(s); remove them first`);
+  // toOwnerId is a Restrict FK; without this check the delete would be a 500.
+  // (fromOwnerId is SET NULL, so it needs no check.)
+  const moves = await prisma.unitAssignmentEvent.count({ where: { toOwnerId: id } });
+  if (moves > 0) throw new ConflictError("Owner appears in unit assignment history; it cannot be deleted");
   await prisma.unitOwner.delete({ where: { id } });
 }

@@ -5,6 +5,11 @@ import { getLessorProfile } from "../services/lessorProfileService.js";
 export async function list(req, res, next) {
   try { res.json(await service.listOwners(req.user)); } catch (e) { next(e); }
 }
+// Unscoped owner list for the account-approval link-picker — see
+// listOwnersForLinking for why this must not reuse the officer-scoped list().
+export async function linkable(req, res, next) {
+  try { res.json(await service.listOwnersForLinking()); } catch (e) { next(e); }
+}
 export async function assign(req, res, next) {
   try {
     const { assignedOfficerId } = ownerAssignSchema.parse(req.body);

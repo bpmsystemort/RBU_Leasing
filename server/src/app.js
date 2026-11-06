@@ -4,6 +4,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import authRoutes from "./routes/authRoutes.js";
 import ownerRoutes from "./routes/ownerRoutes.js";
+import ownerInviteRoutes from "./routes/ownerInviteRoutes.js";
 import tenantRoutes from "./routes/tenantRoutes.js";
 import unitRoutes from "./routes/unitRoutes.js";
 import leaseRoutes from "./routes/leaseRoutes.js";
@@ -17,6 +18,7 @@ import inquiryRoutes from "./routes/inquiryRoutes.js";
 import lessorInfoSheetRoutes from "./routes/lessorInfoSheetRoutes.js";
 import lesseeInfoSheetRoutes from "./routes/lesseeInfoSheetRoutes.js";
 import auditRoutes from "./routes/auditRoutes.js";
+import importRoutes from "./routes/importRoutes.js";
 import cmsFormRoutes from "./routes/cmsFormRoutes.js";
 import { cmsPageFormRouter, pageFormRouter } from "./routes/pageFormRoutes.js";
 import leasingTransactionRoutes from "./routes/leasingTransactionRoutes.js";
@@ -24,6 +26,7 @@ import appointmentRoutes from "./routes/appointmentRoutes.js";
 import unitListingRoutes from "./routes/unitListingRoutes.js";
 import publicUnitRoutes from "./routes/publicUnitRoutes.js";
 import { publicEstateRouter, publicTowerRouter } from "./routes/publicReferenceRoutes.js";
+import settingsRoutes from "./routes/settingsRoutes.js";
 import { auditMiddleware } from "./middleware/audit.js";
 import { errorHandler } from "./middleware/error.js";
 import { prisma } from "./lib/prisma.js";
@@ -50,6 +53,7 @@ export function createApp() {
   app.use(auditMiddleware); // records every successful mutating action
   app.use("/api/auth", authRoutes);
   app.use("/api/owners", ownerRoutes);
+  app.use("/api/owner-invites", ownerInviteRoutes);
   app.use("/api/tenants", tenantRoutes);
   app.use("/api/units", unitRoutes);
   app.use("/api/leases", leaseRoutes);
@@ -63,6 +67,7 @@ export function createApp() {
   app.use("/api/lessor-info-sheets", lessorInfoSheetRoutes);
   app.use("/api/lessee-info-sheets", lesseeInfoSheetRoutes);
   app.use("/api/audit", auditRoutes);
+  app.use("/api/import", importRoutes);
   app.use("/api/cms/forms", cmsFormRoutes);
   app.use("/api/cms/page-forms", cmsPageFormRouter);
   app.use("/api/page-forms", pageFormRouter);
@@ -72,6 +77,7 @@ export function createApp() {
   app.use("/api/public/units", publicUnitRoutes);
   app.use("/api/public/estates", publicEstateRouter);
   app.use("/api/public/towers", publicTowerRouter);
+  app.use("/api/settings", settingsRoutes);
 
   // Production: serve the built Vue client as a single deployable. The API
   // routes above take precedence; any other GET falls back to index.html so

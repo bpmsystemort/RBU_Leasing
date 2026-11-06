@@ -1,0 +1,2 @@
+ALTER TABLE "Appointment" ADD COLUMN IF NOT EXISTS "proposedByRole" TEXT;
+ALTER TABLE "Appointment" ADD COLUMN IF NOT EXISTS "confirmedAt" TIMESTAMP(3);
